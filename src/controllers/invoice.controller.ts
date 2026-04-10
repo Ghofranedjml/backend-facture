@@ -155,8 +155,9 @@ export async function validateTaxes(req: Request, res: Response, next: NextFunct
       withholdingTax: Number(invoice.withholdingTax),
       total: Number(invoice.total),
       currency: invoice.currency,
+      withholdingTaxType: invoice.withholdingTaxType,
       client: {
-        country: 'TN',
+        address: invoice.client.address,
         type: invoice.client.taxId ? 'PRO' : 'INDIVIDUAL',
       },
     });

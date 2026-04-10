@@ -1,102 +1,121 @@
-# E-Tafakna — Module de Facturation (Backend)
+# E-Tafakna — Backend facturation (`backend-facture`)
 
-> Node.js 22 · TypeScript · Express · Prisma · PostgreSQL  
-> PFE-DEV-01 — Sprint 1 & 2
+API REST de facturation pour **E-Tafakna** : clients, factures, devis, calculs fiscaux tunisiens, PDF, relances et analyses.
+
+> **Stack** : Node.js 22 · TypeScript · Express · Prisma · PostgreSQL · Jest
+
+Ce dépôt correspond au module **etafakna-billing** (dossier local). Le dépôt GitHub `**backend-facture`** héberge l’intégralité du code source, pas seulement un README vide.
 
 ## Prérequis
 
-- Node.js ≥ 22
-- PostgreSQL ≥ 15 (local ou Azure SQL)
+- Node.js ≥ 22  
+- PostgreSQL ≥ 15  
 - npm ≥ 10
 
 ## Installation
 
 ```bash
-# 1. Cloner et installer les dépendances
-cd etafakna-billing
+git clone https://github.com/Ghofranedjml/backend-facture.git
+cd backend-facture
 npm install
 
 # 2. Configurer l'environnement
 cp .env.example .env
-# → Éditer .env avec vos valeurs (DATABASE_URL, JWT_SECRET, etc.)
+# → Éditer .env (DATABASE_URL, JWT_SECRET, etc.)
 
-# 3. Générer le client Prisma
+# 3. Client Prisma
 npm run db:generate
 
-# 4. Créer la base de données et appliquer les migrations
+# 4. Migrations
 npm run db:migrate
 
-# 5. Peupler avec des données de test
+# 5. Données de test (optionnel)
 npm run db:seed
 
-# 6. Démarrer le serveur de développement
+# 6. Développement
 npm run dev
 ```
 
-L'API est disponible sur `http://localhost:3001/api`
+L’API est exposée sous le préfixe configuré (par défaut `http://localhost:3001/api`).
+
+## Fonctionnalités principales
+
+
+| Domaine       | Description                                                         |
+| ------------- | ------------------------------------------------------------------- |
+| **Clients**   | CRUD multi-tenant (`userId`)                                        |
+| **Factures**  | Brouillon → émise → payée / annulée, statistiques dashboard         |
+| **Devis**     | Création, envoi, acceptation/refus, conversion en facture           |
+| **Fiscalité** | TVA multi-taux, timbre fiscal, retenue à la source (factures)       |
+| **PDF**       | Génération et envoi par e-mail                                      |
+| **Scheduler** | Factures en retard, relances, expiration des devis                  |
+| **Services**  | Moteur fiscal (`fiscalEngine`), assistant d’analyse (`aiAssistant`) |
+
+
+## API (aperçu)
+
+Toutes les routes sous `API_PREFIX` (ex. `/api`), sauf `/health`.
+
+
+| Ressource | Exemples                                                                                                                                 |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Clients   | `GET/POST /clients`, `GET/PUT/DELETE /clients/:id`                                                                                       |
+| Factures  | `GET /invoices`, `POST /invoices`, `GET /invoices/stats`, transitions `validate`, `pay`, `cancel`, `/:id/analyze`, `/:id/validate-taxes` |
+| Devis     | `GET/POST /quotations`, `PUT/DELETE /quotations/:id`, `send`, `accept`, `refuse`, `convert`                                              |
+
+
+Authentification : **JWT Bearer** sur les routes protégées.
 
 ## Structure du projet
 
 ```
-etafakna-billing/
+backend-facture/
 ├── prisma/
-│   ├── schema.prisma        # Modèle de données (Invoice, Client, AuditLog)
-│   └── seed.ts              # Données de test
+│   ├── schema.prisma        # Modèles (Client, Invoice, Quotation, …)
+│   ├── migrations/
+│   └── seed.ts
 ├── src/
-│   ├── config/
-│   │   ├── env.ts           # Variables d'env (validation Zod)
-│   │   ├── prisma.ts        # Client Prisma singleton
-│   │   └── logger.ts        # Winston logger
-│   ├── controllers/         # Logique HTTP (sprint 3)
-│   ├── services/            # Logique métier (sprint 3)
-│   ├── routes/              # Express Router (sprint 3)
-│   ├── middlewares/
-│   │   ├── auth.middleware.ts    # JWT Bearer token
-│   │   └── error.middleware.ts   # Gestionnaire d'erreurs global
-│   ├── utils/
-│   │   ├── fiscalCalculator.ts   # ⭐ Calculs fiscaux tunisiens
-│   │   ├── invoiceNumber.ts      # Générateur numéros FAC-YYYY-NNN
-│   │   └── validators.ts         # Schémas Zod
+│   ├── config/              # env, prisma, logger
+│   ├── controllers/         # clients, invoices, pdf, quotations
+│   ├── middlewares/         # auth JWT, erreurs
+│   ├── routes/
+│   ├── services/            # métier, email, PDF, scheduler, fiscalEngine, aiAssistant
+│   ├── utils/               # fiscalCalculator, validators, numéros FAC-/DEV-
 │   ├── types/
-│   │   └── index.ts         # Types TypeScript partagés
-│   ├── app.ts               # Configuration Express
-│   └── index.ts             # Point d'entrée
+│   ├── app.ts
+│   └── index.ts
 └── tests/
-    └── unit/
-        └── fiscalCalculator.test.ts  # Tests TVA, timbre, retenue
+    ├── unit/
+    └── integration/
 ```
 
 ## Commandes utiles
 
-| Commande | Description |
-|---|---|
-| `npm run dev` | Serveur dev avec hot-reload |
-| `npm run build` | Compilation TypeScript |
-| `npm test` | Tous les tests Jest |
-| `npm run test:coverage` | Tests + rapport de couverture |
-| `npm run db:migrate` | Nouvelle migration Prisma |
-| `npm run db:studio` | Prisma Studio (UI BDD) |
-| `npm run db:seed` | Données de test |
-| `npm run type-check` | Vérification TS sans compilation |
-| `npm run lint` | ESLint |
 
-## Fiscalité tunisienne — Règles implémentées
+| Commande                | Description             |
+| ----------------------- | ----------------------- |
+| `npm run dev`           | Serveur dev (tsx watch) |
+| `npm run build`         | Compilation TypeScript  |
+| `npm test`              | Tests Jest              |
+| `npm run test:coverage` | Couverture              |
+| `npm run db:migrate`    | Migrations Prisma       |
+| `npm run db:studio`     | Prisma Studio           |
+| `npm run type-check`    | Vérification TS         |
+| `npm run lint`          | ESLint                  |
 
-| Règle | Valeur | Fichier |
-|---|---|---|
-| TVA taux zéro | 0% — exportations | `fiscalCalculator.ts` |
-| TVA réduite | 7% — produits nécessité | `fiscalCalculator.ts` |
-| TVA intermédiaire | 13% — services bancaires | `fiscalCalculator.ts` |
-| TVA standard | 19% — services informatiques | `fiscalCalculator.ts` |
-| Timbre fiscal | 1 TND si HT > 1 000 TND | `fiscalCalculator.ts` |
-| RAS Honoraires | 15% du montant HT | `fiscalCalculator.ts` |
-| RAS Loyers | 15% du montant HT | `fiscalCalculator.ts` |
-| RAS Marchés | 1.5% du montant HT | `fiscalCalculator.ts` |
 
-## Prochaines étapes (Sprint 3)
+## Fiscalité tunisienne (rappel)
 
-- [ ] `invoiceService.ts` — logique CRUD complète
-- [ ] `invoiceController.ts` — endpoints REST
-- [ ] `invoices.routes.ts` — routing Express
-- [ ] `clientService.ts` + `clientController.ts`
-- [ ] Tests d'intégration (Supertest)
+
+| Règle               | Détail                                      |
+| ------------------- | ------------------------------------------- |
+| TVA                 | 0 %, 7 %, 13 %, 19 % selon `VatRate`        |
+| Timbre fiscal       | 1 TND si HT > 1 000 TND (factures)          |
+| Retenue à la source | Selon `WithholdingTaxType` sur les factures |
+
+
+Les devis utilisent le même moteur de lignes/TVA ; le timbre fiscal n’est pas appliqué sur les devis comme sur les factures (voir `calcTaxBreakdown` avec `applyStampDuty`).
+
+## Licence / contexte
+
+Projet **PFE-DEV-01** — module de facturation E-Tafakna.
