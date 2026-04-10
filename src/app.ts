@@ -12,6 +12,7 @@ import { logger } from './config/logger';
 import invoiceRoutes from './routes/invoices.routes';
 import clientRoutes from './routes/clients.routes';
 import quotationRoutes from './routes/quotations.routes';
+import dashboardRoutes from './routes/dashboard.routes';
 
 const app = express();
 
@@ -67,6 +68,7 @@ const router = express.Router();
 router.use('/invoices', invoiceRoutes);
 router.use('/clients', clientRoutes);
 router.use('/quotations', quotationRoutes);
+router.use('/dashboard', dashboardRoutes);
 
 router.get('/', (_req, res) => {
   res.json({
@@ -74,7 +76,7 @@ router.get('/', (_req, res) => {
     data: {
       message: 'E-Tafakna Billing API',
       version: '1.0.0',
-      endpoints: ['/invoices', '/invoices/stats', '/clients', '/quotations'],
+      endpoints: ['/invoices', '/invoices/stats', '/clients', '/quotations', '/dashboard/stats'],
     },
   });
 });
