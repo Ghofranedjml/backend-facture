@@ -1,6 +1,7 @@
 import prisma from '../config/prisma';
 import { AppError } from '../middlewares/error.middleware';
-import { CreateClientInput, UpdateClientInput } from '../utils/validators';
+import { sendClientContactEmail } from './email.service';
+import { CreateClientInput, SendClientEmailInput, UpdateClientInput } from '../utils/validators';
 
 // ─── LIST ──────────────────────────────────
 export async function listClients(userId: string, search?: string) {
@@ -76,4 +77,23 @@ export async function deleteClient(clientId: string, userId: string): Promise<vo
   }
 
   await prisma.client.delete({ where: { id: clientId } });
+}
+
+export async function sendEmailToClient(
+  clientId: string,
+  userId: string,
+  input: SendClientEmailInput,
+): Promise<void> {
+  const client = await getClient(clientId, userId);
+
+  if (!client.email) {
+    throw new AppError(422, 'NO_EMAIL', 'Aucune adresse email enregistree pour ce client');
+  }
+
+  const subject = input.subject?.trim() || 'E-Tafakna - Votre facturation';
+  const message =
+    input.message?.trim() ||
+    'Bonjour,\n\nJe vous contacte concernant votre facturation.\n\nCordialement,\nE-Tafakna';
+
+  await sendClientContactEmail(client.email, client.name, subject, message);
 }

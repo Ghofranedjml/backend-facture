@@ -7,3 +7,4 @@ coverage/
 prisma/migrations/dev.db
 *.log
 .DS_Store
+.cursor/

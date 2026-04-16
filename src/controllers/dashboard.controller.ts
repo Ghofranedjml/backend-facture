@@ -1,7 +1,7 @@
 import { NextFunction, Request, Response } from 'express';
 import { getDashboardStats } from '../services/dashboard.service';
 
-export async function stats(req: Request, res: Response, next: NextFunction): Promise<void> {
+export async function getStats(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const data = await getDashboardStats(req.user!.userId);
     res.json({ success: true, data });
@@ -9,3 +9,5 @@ export async function stats(req: Request, res: Response, next: NextFunction): Pr
     next(err);
   }
 }
+
+export const stats = getStats;

@@ -113,6 +113,13 @@ export type CreateClientInput = z.infer<typeof createClientSchema>;
 export const updateClientSchema = createClientSchema.partial();
 export type UpdateClientInput = z.infer<typeof updateClientSchema>;
 
+export const sendClientEmailSchema = z.object({
+  subject: z.string().min(1).max(200).optional(),
+  message: z.string().min(1).max(5000).optional(),
+});
+
+export type SendClientEmailInput = z.infer<typeof sendClientEmailSchema>;
+
 // ─── Quotation (Devis) ─────────────────────
 
 export const quotationLineSchema = z.object({

@@ -1,81 +1,24 @@
 import { InvoiceStatus, QuotationStatus } from '@prisma/client';
 import prisma from '../config/prisma';
-
-interface DashboardStats {
-  kpis: {
-    caMensuelPaye: number;
-    caMensuelVariation: number;
-    facturesPaYees: number;
-    facturesTotalCeMois: number;
-    montantEnAttente: number;
-    nombreEnAttente: number;
-    clientsActifs: number;
-    nombreDevis: number;
-    delaiMoyenPaiement: number;
-  };
-  evolutionCA: Array<{
-    mois: string;
-    annee: number;
-    ca: number;
-  }>;
-  statsCA: {
-    minimum: number;
-    moyenne: number;
-    maximum: number;
-    moisMaximum: string;
-    croissance: number;
-  };
-  repartitionParClient: Array<{
-    clientId: string;
-    clientName: string;
-    ca: number;
-    pourcentage: number;
-    variation: number;
-  }>;
-  alertesImpayes: {
-    montantTotal: number;
-    nombreFactures: number;
-    tauxPaiement: number;
-    seuilDepasse: boolean;
-  };
-  indicateursDevis: {
-    tauxRecouvrement: number;
-    tauxConversionDevis: number;
-    brouillonsAEmettre: number;
-    devisExpires: number;
-  };
-  conversionsDevis: Array<{
-    devisId: string;
-    devisNumber: string;
-    invoiceId: string;
-    invoiceNumber: string;
-    clientName: string;
-    montant: number;
-    date: Date;
-  }>;
-  dernieresFactures: Array<{
-    id: string;
-    numero: string;
-    clientName: string;
-    clientCompany: string;
-    montantTTC: number;
-    date: Date;
-    statut: string;
-  }>;
-  repartitionStatuts: Array<{
-    statut: string;
-    nombre: number;
-    pourcentage: number;
-  }>;
-}
+import { DashboardStatsData } from '../types/dashboard.types';
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+function round1(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
 function percentChange(current: number, previous: number): number {
   if (previous <= 0) return 0;
   return ((current - previous) / previous) * 100;
+}
+
+function toSignedTrend(value: number): string {
+  const rounded = round1(value);
+  const sign = rounded >= 0 ? '+' : '';
+  return `${sign}${rounded}`;
 }
 
 function getMonthKey(date: Date): string {
@@ -98,7 +41,24 @@ function getLast12CalendarMonths(now: Date): Date[] {
   return months;
 }
 
-export async function getDashboardStats(userId: string): Promise<DashboardStats> {
+function formatMonthYearFr(date: Date): string {
+  const monthNames = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc'];
+  return `${monthNames[date.getMonth()]} ${date.getFullYear()}`;
+}
+
+function formatMonthEn(date: Date): string {
+  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return monthNames[date.getMonth()];
+}
+
+function normalizeInvoiceStatus(status: InvoiceStatus): 'PAID' | 'PENDING' | 'DRAFT' | 'CANCELLED' {
+  if (status === InvoiceStatus.PAID) return 'PAID';
+  if (status === InvoiceStatus.DRAFT) return 'DRAFT';
+  if (status === InvoiceStatus.CANCELLED) return 'CANCELLED';
+  return 'PENDING';
+}
+
+export async function getDashboardStats(userId: string): Promise<DashboardStatsData> {
   const now = new Date();
   const thisMonthStart = startOfMonth(now);
   const thisMonthEnd = endOfMonth(now);
@@ -107,30 +67,35 @@ export async function getDashboardStats(userId: string): Promise<DashboardStats>
 
   const months = getLast12CalendarMonths(now);
   const twelveMonthsStart = startOfMonth(months[0]);
-  const previousPeriodStart = startOfMonth(new Date(months[0].getFullYear(), months[0].getMonth() - 12, 1));
-  const previousPeriodEnd = endOfMonth(new Date(months[months.length - 1].getFullYear(), months[months.length - 1].getMonth() - 12, 1));
-
   const [
     paidThisMonthAgg,
     paidPreviousMonthAgg,
-    invoicesTotalThisMonth,
     pendingIssuedAgg,
     activeClientsRaw,
-    sentQuotationsCount,
-    avgPaymentDelayRaw,
-    paid12Months,
-    paidPrevious12MonthsAgg,
+    quotationTotalCount,
+    quotationAcceptedCount,
+    quotationConvertedCount,
+    quotationSentCount,
+    invoiceTotalCount,
+    activeQuotationClientsRaw,
+    paidInvoicesForDelay,
+    paidInvoicesCurrentMonthForDelay,
+    paidInvoices12Months,
+    paidInvoicesPreviousMonthForDelay,
     topClientsCurrent,
     topClientsPrevious,
-    overdueAgg,
-    invoiceStatusEmissionCounts,
+    paidTotalsAgg,
+    emittedTotalsAgg,
     draftInvoicesCount,
-    quotationCounts,
     recentConversionsRaw,
     latestInvoicesRaw,
-    statusBreakdownRaw,
-  ] = await Promise.all([
-    prisma.invoice.aggregate({
+    paidInvoicesAllTimeCount,
+    issuedCount,
+    overdueCount,
+    draftCount,
+  ] =
+    await prisma.$transaction([
+      prisma.invoice.aggregate({
       where: {
         userId,
         status: InvoiceStatus.PAID,
@@ -139,7 +104,7 @@ export async function getDashboardStats(userId: string): Promise<DashboardStats>
       _sum: { total: true },
       _count: true,
     }),
-    prisma.invoice.aggregate({
+      prisma.invoice.aggregate({
       where: {
         userId,
         status: InvoiceStatus.PAID,
@@ -147,37 +112,49 @@ export async function getDashboardStats(userId: string): Promise<DashboardStats>
       },
       _sum: { total: true },
     }),
-    prisma.invoice.count({
-      where: {
-        userId,
-        issueDate: { gte: thisMonthStart, lte: thisMonthEnd },
-      },
-    }),
-    prisma.invoice.aggregate({
-      where: { userId, status: InvoiceStatus.ISSUED },
+      prisma.invoice.aggregate({
+      where: { userId, status: { in: [InvoiceStatus.ISSUED, InvoiceStatus.OVERDUE] } },
       _sum: { total: true },
       _count: true,
     }),
-    prisma.invoice.findMany({
+      prisma.invoice.findMany({
       where: { userId },
       select: { clientId: true },
       distinct: ['clientId'],
     }),
-    prisma.quotation.count({
-      where: { userId, status: QuotationStatus.SENT },
-    }),
-    prisma.invoice.findMany({
+      prisma.quotation.count({ where: { userId } }),
+      prisma.quotation.count({ where: { userId, status: QuotationStatus.ACCEPTED } }),
+      prisma.quotation.count({ where: { userId, status: QuotationStatus.CONVERTED } }),
+      prisma.quotation.count({ where: { userId, status: QuotationStatus.SENT } }),
+      prisma.invoice.count({ where: { userId } }),
+      prisma.quotation.findMany({
+        where: { userId },
+        select: { clientId: true },
+        distinct: ['clientId'],
+      }),
+      prisma.invoice.findMany({
       where: {
         userId,
         status: InvoiceStatus.PAID,
         paidDate: { not: null },
       },
       select: {
-        issueDate: true,
+        createdAt: true,
         paidDate: true,
       },
     }),
-    prisma.invoice.findMany({
+      prisma.invoice.findMany({
+        where: {
+          userId,
+          status: InvoiceStatus.PAID,
+          paidDate: { gte: thisMonthStart, lte: thisMonthEnd },
+        },
+        select: {
+          createdAt: true,
+          paidDate: true,
+        },
+      }),
+      prisma.invoice.findMany({
       where: {
         userId,
         status: InvoiceStatus.PAID,
@@ -188,56 +165,56 @@ export async function getDashboardStats(userId: string): Promise<DashboardStats>
         paidDate: true,
       },
     }),
-    prisma.invoice.aggregate({
-      where: {
-        userId,
-        status: InvoiceStatus.PAID,
-        paidDate: { gte: previousPeriodStart, lte: previousPeriodEnd },
-      },
-      _sum: { total: true },
-    }),
-    prisma.invoice.groupBy({
-      by: ['clientId'],
-      where: {
-        userId,
-        status: InvoiceStatus.PAID,
-        paidDate: { gte: twelveMonthsStart, lte: thisMonthEnd },
-      },
-      _sum: { total: true },
-      orderBy: { _sum: { total: 'desc' } },
-      take: 5,
-    }),
-    prisma.invoice.groupBy({
-      by: ['clientId'],
-      where: {
-        userId,
-        status: InvoiceStatus.PAID,
-        paidDate: { gte: previousPeriodStart, lte: previousPeriodEnd },
-      },
-      _sum: { total: true },
-    }),
-    prisma.invoice.aggregate({
-      where: { userId, status: InvoiceStatus.OVERDUE },
-      _sum: { total: true },
-      _count: true,
-    }),
-    prisma.invoice.groupBy({
-      by: ['status'],
+      prisma.invoice.findMany({
+        where: {
+          userId,
+          status: InvoiceStatus.PAID,
+          paidDate: { gte: previousMonthStart, lte: previousMonthEnd },
+        },
+        select: {
+          createdAt: true,
+          paidDate: true,
+        },
+      }),
+      prisma.invoice.groupBy({
+        by: ['clientId'],
+        where: {
+          userId,
+          status: InvoiceStatus.PAID,
+        },
+        _sum: { total: true },
+        orderBy: { _sum: { total: 'desc' } },
+        take: 5,
+      }),
+      prisma.invoice.groupBy({
+        by: ['clientId'],
+        where: {
+          userId,
+          status: InvoiceStatus.PAID,
+          paidDate: { gte: previousMonthStart, lte: previousMonthEnd },
+        },
+        orderBy: { clientId: 'asc' },
+        _sum: { total: true },
+      }),
+      prisma.invoice.aggregate({
+        where: {
+          userId,
+          status: InvoiceStatus.PAID,
+        },
+        _sum: { total: true },
+      }),
+      prisma.invoice.aggregate({
       where: {
         userId,
         status: { in: [InvoiceStatus.ISSUED, InvoiceStatus.PAID, InvoiceStatus.OVERDUE] },
       },
+      _sum: { total: true },
       _count: true,
     }),
-    prisma.invoice.count({
-      where: { userId, status: InvoiceStatus.DRAFT },
-    }),
-    prisma.quotation.groupBy({
-      by: ['status'],
-      where: { userId },
-      _count: true,
-    }),
-    prisma.quotation.findMany({
+      prisma.invoice.count({
+        where: { userId, status: InvoiceStatus.DRAFT },
+      }),
+      prisma.quotation.findMany({
       where: {
         userId,
         status: QuotationStatus.CONVERTED,
@@ -250,73 +227,79 @@ export async function getDashboardStats(userId: string): Promise<DashboardStats>
         convertedInvoice: { select: { id: true, invoiceNumber: true } },
       },
     }),
-    prisma.invoice.findMany({
+      prisma.invoice.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
       take: 5,
       include: {
-        client: { select: { name: true } },
+        client: { select: { name: true, taxId: true } },
       },
     }),
-    prisma.invoice.groupBy({
-      by: ['status'],
-      where: { userId },
-      _count: true,
-    }),
-  ]);
+      prisma.invoice.count({ where: { userId, status: InvoiceStatus.PAID } }),
+      prisma.invoice.count({ where: { userId, status: InvoiceStatus.ISSUED } }),
+      prisma.invoice.count({ where: { userId, status: InvoiceStatus.OVERDUE } }),
+      prisma.invoice.count({ where: { userId, status: InvoiceStatus.DRAFT } }),
+    ]);
 
   const caMensuelPaye = Number(paidThisMonthAgg._sum.total ?? 0);
   const caMensuelPayePrev = Number(paidPreviousMonthAgg._sum.total ?? 0);
   const caMensuelVariation = percentChange(caMensuelPaye, caMensuelPayePrev);
-
   const pendingAmount = Number(pendingIssuedAgg._sum.total ?? 0);
-  const activeClients = activeClientsRaw.length;
+  const activeClients = new Set([
+    ...activeClientsRaw.map((row) => row.clientId),
+    ...activeQuotationClientsRaw.map((row) => row.clientId),
+  ]).size;
 
   const avgDelayDays =
-    avgPaymentDelayRaw.length === 0
+    paidInvoicesForDelay.length === 0
       ? 0
-      : avgPaymentDelayRaw.reduce((sum, row) => {
-          const paidAt = row.paidDate?.getTime() ?? row.issueDate.getTime();
-          const diff = (paidAt - row.issueDate.getTime()) / (1000 * 60 * 60 * 24);
-          return sum + diff;
-        }, 0) / avgPaymentDelayRaw.length;
+      : paidInvoicesForDelay.reduce((sum, row) => {
+          const paidAt = row.paidDate?.getTime() ?? row.createdAt.getTime();
+          return sum + (paidAt - row.createdAt.getTime()) / (1000 * 60 * 60 * 24);
+        }, 0) / paidInvoicesForDelay.length;
+
+  const avgCurrentDelayDays =
+    paidInvoicesCurrentMonthForDelay.length === 0
+      ? 0
+      : paidInvoicesCurrentMonthForDelay.reduce((sum, row) => {
+          const paidAt = row.paidDate?.getTime() ?? row.createdAt.getTime();
+          return sum + (paidAt - row.createdAt.getTime()) / (1000 * 60 * 60 * 24);
+        }, 0) / paidInvoicesCurrentMonthForDelay.length;
+
+  const avgPrevDelayDays =
+    paidInvoicesPreviousMonthForDelay.length === 0
+      ? 0
+      : paidInvoicesPreviousMonthForDelay.reduce((sum, row) => {
+          const paidAt = row.paidDate?.getTime() ?? row.createdAt.getTime();
+          return sum + (paidAt - row.createdAt.getTime()) / (1000 * 60 * 60 * 24);
+        }, 0) / paidInvoicesPreviousMonthForDelay.length;
 
   const caByMonth = new Map<string, number>();
-  for (const invoice of paid12Months) {
+  for (const invoice of paidInvoices12Months) {
     if (!invoice.paidDate) continue;
     const key = getMonthKey(invoice.paidDate);
     const current = caByMonth.get(key) ?? 0;
     caByMonth.set(key, current + Number(invoice.total));
   }
 
-  const evolutionCA = months.map((monthDate) => {
+  const revenueChartData = months.map((monthDate) => {
     const key = getMonthKey(monthDate);
     const ca = caByMonth.get(key) ?? 0;
-    const mois = monthDate.toLocaleString('fr-FR', { month: 'short' });
     return {
-      mois: mois.charAt(0).toUpperCase() + mois.slice(1).replace('.', ''),
-      annee: monthDate.getFullYear(),
-      ca: round2(ca),
+      month: formatMonthYearFr(monthDate),
+      amount: round2(ca),
     };
   });
-
-  const caValues = evolutionCA.map((row) => row.ca);
-  const minimum = caValues.length > 0 ? Math.min(...caValues) : 0;
-  const maximum = caValues.length > 0 ? Math.max(...caValues) : 0;
-  const moyenne =
-    caValues.length > 0
-      ? caValues.reduce((sum, value) => sum + value, 0) / caValues.length
-      : 0;
-  const maxIndex = caValues.findIndex((value) => value === maximum);
-  const moisMaximum = maxIndex >= 0 ? evolutionCA[maxIndex].mois : '';
-
-  const current12Total = caValues.reduce((sum, value) => sum + value, 0);
-  const previous12Total = Number(paidPrevious12MonthsAgg._sum.total ?? 0);
-  const croissance = percentChange(current12Total, previous12Total);
+  const totalRevenue12Months = revenueChartData.reduce((sum, row) => sum + row.amount, 0);
+  const peakMonthData = revenueChartData.reduce(
+    (max, row, index) => (row.amount > max.amount ? { index, amount: row.amount } : max),
+    { index: -1, amount: -1 },
+  );
+  const peakMonth = peakMonthData.index >= 0 ? formatMonthEn(months[peakMonthData.index]) : '';
 
   const previousByClient = new Map<string, number>();
   for (const row of topClientsPrevious) {
-    previousByClient.set(row.clientId, Number(row._sum.total ?? 0));
+    previousByClient.set(row.clientId, Number(row._sum?.total ?? 0));
   }
 
   const topClientIds = topClientsCurrent.map((row) => row.clientId);
@@ -328,95 +311,90 @@ export async function getDashboardStats(userId: string): Promise<DashboardStats>
     : [];
   const clientNameById = new Map(topClientsDetails.map((c) => [c.id, c.name]));
 
-  const totalTopClientsCA = topClientsCurrent.reduce((sum, row) => sum + Number(row._sum.total ?? 0), 0);
-  const repartitionParClient = topClientsCurrent.map((row) => {
-    const current = Number(row._sum.total ?? 0);
+  const totalPaidAllTime = Number(paidTotalsAgg._sum.total ?? 0);
+  const topClients = topClientsCurrent.slice(0, 3).map((row) => {
+    const current = Number(row._sum?.total ?? 0);
     const previous = previousByClient.get(row.clientId) ?? 0;
+    const share = totalPaidAllTime > 0 ? (current / totalPaidAllTime) * 100 : 0;
     return {
-      clientId: row.clientId,
-      clientName: clientNameById.get(row.clientId) ?? 'Client inconnu',
-      ca: round2(current),
-      pourcentage: round2(totalTopClientsCA > 0 ? (current / totalTopClientsCA) * 100 : 0),
-      variation: round2(percentChange(current, previous)),
+      name: clientNameById.get(row.clientId) ?? 'Client inconnu',
+      percentage: round2(share),
+      trend: toSignedTrend(percentChange(current, previous)),
+      share: round2(share),
     };
   });
 
-  const overdueAmount = Number(overdueAgg._sum.total ?? 0);
-  const emittedInvoiceCount = invoiceStatusEmissionCounts.reduce((sum, row) => sum + row._count, 0);
-  const paidEmittedCount =
-    invoiceStatusEmissionCounts.find((row) => row.status === InvoiceStatus.PAID)?._count ?? 0;
-  const tauxPaiement = emittedInvoiceCount > 0 ? (paidEmittedCount / emittedInvoiceCount) * 100 : 0;
+  const totalIssuedAmount = Number(emittedTotalsAgg._sum.total ?? 0);
+  const pendingCount = issuedCount + overdueCount;
+  const ratioTotal = invoiceTotalCount;
+  const paidRatioPercentage = ratioTotal > 0 ? (paidInvoicesAllTimeCount / ratioTotal) * 100 : 0;
+  const recoveryRate = totalIssuedAmount > 0 ? (totalPaidAllTime / totalIssuedAmount) * 100 : 0;
 
-  const totalQuotations = quotationCounts.reduce((sum, row) => sum + row._count, 0);
-  const convertedQuotations =
-    quotationCounts.find((row) => row.status === QuotationStatus.CONVERTED)?._count ?? 0;
-  const expiredQuotations =
-    quotationCounts.find((row) => row.status === QuotationStatus.EXPIRED)?._count ?? 0;
+  const totalQuotations = quotationTotalCount;
+  const acceptedQuotations = quotationAcceptedCount;
+  const convertedQuotations = quotationConvertedCount;
+  const sentQuotations = quotationSentCount;
+  const conversionRate = totalQuotations > 0 ? ((acceptedQuotations + convertedQuotations) / totalQuotations) * 100 : 0;
 
-  const conversionRows = recentConversionsRaw
+  const conversionHistory = recentConversionsRaw
     .filter((row) => row.convertedInvoice !== null)
     .map((row) => ({
-      devisId: row.id,
-      devisNumber: row.quotationNumber,
-      invoiceId: row.convertedInvoice!.id,
+      quotationNumber: row.quotationNumber,
       invoiceNumber: row.convertedInvoice!.invoiceNumber,
       clientName: row.client.name,
-      montant: round2(Number(row.total)),
-      date: row.convertedAt ?? row.updatedAt,
     }));
 
-  const dernieresFactures = latestInvoicesRaw.map((invoice) => ({
-    id: invoice.id,
-    numero: invoice.invoiceNumber,
+  const recentInvoices = latestInvoicesRaw.map((invoice) => ({
+    number: invoice.invoiceNumber,
     clientName: invoice.client.name,
-    clientCompany: invoice.client.name,
-    montantTTC: round2(Number(invoice.total)),
-    date: invoice.issueDate,
-    statut: invoice.status,
+    clientType: invoice.client.taxId ? 'Entreprise' : 'Particulier',
+    amount: round2(Number(invoice.total)),
+    currency: invoice.currency,
+    date: invoice.issueDate.toISOString().split('T')[0],
+    status: normalizeInvoiceStatus(invoice.status),
   }));
 
-  const totalInvoicesForBreakdown = statusBreakdownRaw.reduce((sum, row) => sum + row._count, 0);
-  const repartitionStatuts = statusBreakdownRaw.map((row) => ({
-    statut: row.status,
-    nombre: row._count,
-    pourcentage: round2(totalInvoicesForBreakdown > 0 ? (row._count / totalInvoicesForBreakdown) * 100 : 0),
-  }));
+  const paidPct = ratioTotal > 0 ? (paidInvoicesAllTimeCount / ratioTotal) * 100 : 0;
+  const pendingPct = ratioTotal > 0 ? (pendingCount / ratioTotal) * 100 : 0;
+  const draftPct = ratioTotal > 0 ? (draftCount / ratioTotal) * 100 : 0;
 
   return {
     kpis: {
-      caMensuelPaye: round2(caMensuelPaye),
-      caMensuelVariation: round2(caMensuelVariation),
-      facturesPaYees: paidThisMonthAgg._count,
-      facturesTotalCeMois: invoicesTotalThisMonth,
-      montantEnAttente: round2(pendingAmount),
-      nombreEnAttente: pendingIssuedAgg._count,
-      clientsActifs: activeClients,
-      nombreDevis: sentQuotationsCount,
-      delaiMoyenPaiement: round2(avgDelayDays),
+      monthlyRevenue: {
+        amount: round2(caMensuelPaye),
+        currency: 'TND',
+        trend: toSignedTrend(caMensuelVariation),
+      },
+      paidInvoicesRatio: {
+        paid: paidInvoicesAllTimeCount,
+        total: ratioTotal,
+        percentage: round2(paidRatioPercentage),
+      },
+      pendingAmount: round2(pendingAmount),
+      activeClients: activeClients,
+      activeQuotations: sentQuotations,
+      avgPaymentDays: round2(avgDelayDays),
+      avgPaymentTrend: toSignedTrend(avgCurrentDelayDays - avgPrevDelayDays),
     },
-    evolutionCA,
-    statsCA: {
-      minimum: round2(minimum),
-      moyenne: round2(moyenne),
-      maximum: round2(maximum),
-      moisMaximum,
-      croissance: round2(croissance),
+    revenueChart: {
+      total: round2(totalRevenue12Months),
+      peakMonth,
+      data: revenueChartData,
     },
-    repartitionParClient,
-    alertesImpayes: {
-      montantTotal: round2(overdueAmount),
-      nombreFactures: overdueAgg._count,
-      tauxPaiement: round2(tauxPaiement),
-      seuilDepasse: overdueAmount > 5000,
+    statusDistribution: {
+      paid: round2(paidPct),
+      pending: round2(pendingPct),
+      draft: round2(draftPct),
     },
-    indicateursDevis: {
-      tauxRecouvrement: round2(tauxPaiement),
-      tauxConversionDevis: round2(totalQuotations > 0 ? (convertedQuotations / totalQuotations) * 100 : 0),
-      brouillonsAEmettre: draftInvoicesCount,
-      devisExpires: expiredQuotations,
-    },
-    conversionsDevis: conversionRows,
-    dernieresFactures,
-    repartitionStatuts,
+    topClients,
+    recoveryRate: round2(recoveryRate),
+    conversionRate: round2(conversionRate),
+    draftCount: draftInvoicesCount,
+    conversionHistory,
+    recentInvoices,
   };
+}
+
+export async function getStats(userId: number): Promise<DashboardStatsData> {
+  return getDashboardStats(String(userId));
 }

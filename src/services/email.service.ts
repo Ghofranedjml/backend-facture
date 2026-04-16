@@ -92,6 +92,49 @@ function reminderEmailHtml(invoiceNumber: string, clientName: string, total: str
 </html>`;
 }
 
+function clientContactEmailHtml(clientName: string, message: string): string {
+  const escapedMessage = message
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\n/g, '<br/>');
+
+  return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: Arial, sans-serif; background:#f8f8f8; margin:0; padding:0;">
+  <div style="max-width:600px; margin:30px auto; background:#fff; border-radius:10px; overflow:hidden; border:1px solid #e5e5e5;">
+    <div style="background:#1C6AE4; padding:28px 32px;">
+      <h1 style="color:#fff; margin:0; font-size:20px;">E-Tafakna</h1>
+      <p style="color:rgba(255,255,255,0.8); margin:4px 0 0; font-size:13px;">Message client</p>
+    </div>
+    <div style="padding:32px;">
+      <p style="color:#3b3b3b; font-size:15px;">Bonjour <strong>${clientName}</strong>,</p>
+      <p style="color:#6B7280; font-size:14px; line-height:1.6;">${escapedMessage}</p>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+export async function sendClientContactEmail(
+  to: string,
+  clientName: string,
+  subject: string,
+  message: string,
+): Promise<void> {
+  const transporter = createTransporter();
+
+  await transporter.sendMail({
+    from: config.EMAIL_FROM,
+    to,
+    subject,
+    text: message,
+    html: clientContactEmailHtml(clientName, message),
+  });
+}
+
 // ── Send invoice by email ─────────────────────────────────
 export async function sendInvoiceByEmail(
   invoiceId: string,

@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import * as clientService from '../services/client.service';
-import { createClientSchema, updateClientSchema } from '../utils/validators';
+import { createClientSchema, sendClientEmailSchema, updateClientSchema } from '../utils/validators';
 
 // GET /api/clients
 export async function index(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -50,6 +50,17 @@ export async function destroy(req: Request, res: Response, next: NextFunction): 
   try {
     await clientService.deleteClient(req.params.id, req.user!.userId);
     res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+}
+
+// POST /api/clients/:id/send-email
+export async function sendEmail(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const input = sendClientEmailSchema.parse(req.body);
+    await clientService.sendEmailToClient(req.params.id, req.user!.userId, input);
+    res.json({ success: true, data: { message: 'Email envoyé avec succès' } });
   } catch (err) {
     next(err);
   }
