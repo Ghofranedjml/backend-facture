@@ -162,7 +162,20 @@ export async function validateTaxes(req: Request, res: Response, next: NextFunct
       },
     });
 
-    res.json({ success: true, data: validation });
+    res.json({
+      success: true,
+      data: {
+        isValid: validation.isValid,
+        differences: validation.differences,
+        expected: {
+          subtotal: Number(invoice.subtotal),
+          totalVat: validation.expected.tva,
+          stampDuty: validation.expected.timbre,
+          withholdingTax: validation.expected.ras,
+          total: validation.expected.totalTTC,
+        },
+      },
+    });
   } catch (err) {
     next(err);
   }

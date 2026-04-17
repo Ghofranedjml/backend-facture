@@ -148,7 +148,6 @@ export async function sendInvoiceByEmail(
   if (!invoice) throw new AppError(404, 'NOT_FOUND', 'Facture introuvable');
   if (invoice.userId !== userId) throw new AppError(403, 'FORBIDDEN', 'Accès refusé');
   if (!invoice.client.email) throw new AppError(422, 'NO_EMAIL', 'Le client n\'a pas d\'adresse email');
-  if (invoice.status === 'DRAFT') throw new AppError(422, 'INVALID_STATUS', 'Impossible d\'envoyer un brouillon');
 
   // Generate PDF
   const pdfBuffer = await generateInvoicePdf(invoiceId, userId);
@@ -178,18 +177,21 @@ export async function sendInvoiceByEmail(
     ],
   });
 
+  const nextStatus = invoice.status === InvoiceStatus.DRAFT ? InvoiceStatus.ISSUED : invoice.status;
+  const sentAt = new Date();
+
   // Update emailSentAt + audit log
   await prisma.$transaction([
     prisma.invoice.update({
       where: { id: invoiceId },
-      data: { emailSentAt: new Date() },
+      data: { emailSentAt: sentAt, status: nextStatus },
     }),
     prisma.auditLog.create({
       data: {
         invoiceId,
         userId,
         action: 'EMAIL_SENT',
-        metadata: { to: invoice.client.email },
+        metadata: { to: invoice.client.email, sentAt: sentAt.toISOString(), status: 'SENT' },
       },
     }),
   ]);

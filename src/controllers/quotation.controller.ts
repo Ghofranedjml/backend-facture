@@ -54,7 +54,7 @@ export async function update(req: Request, res: Response, next: NextFunction): P
 export async function destroy(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     await quotationService.deleteQuotation(req.params.id, req.user!.userId);
-    res.json({ success: true, message: 'Devis supprime' });
+    res.status(204).send();
   } catch (err) {
     next(err);
   }

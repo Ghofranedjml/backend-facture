@@ -7,6 +7,7 @@ import rateLimit from 'express-rate-limit';
 
 import { config } from './config/env';
 import { errorHandler } from './middlewares/error.middleware';
+import { authenticate } from './middlewares/auth.middleware';
 import { logger } from './config/logger';
 
 import invoiceRoutes from './routes/invoices.routes';
@@ -59,11 +60,15 @@ if (config.NODE_ENV !== 'test') {
 
 // ── Health check ────────────────────────────
 app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'etafakna-billing', timestamp: new Date() });
+  res.json({
+    success: true,
+    data: { status: 'ok', service: 'etafakna-billing', timestamp: new Date() },
+  });
 });
 
 // ── API Routes ──────────────────────────────
 const router = express.Router();
+router.use(authenticate);
 
 router.use('/invoices', invoiceRoutes);
 router.use('/clients', clientRoutes);

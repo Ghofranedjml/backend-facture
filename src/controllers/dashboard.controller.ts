@@ -1,5 +1,5 @@
 import { NextFunction, Request, Response } from 'express';
-import { getDashboardStats } from '../services/dashboard.service';
+import { getStats as getDashboardStats } from '../services/dashboard.service';
 
 export async function getStats(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
