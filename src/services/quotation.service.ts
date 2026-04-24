@@ -251,7 +251,7 @@ export async function convertQuotationToInvoice(
   const quotation = await getQuotation(quotationId, userId);
 
   if (quotation.status !== QuotationStatus.ACCEPTED && quotation.status !== QuotationStatus.SENT) {
-    throw new AppError(422, 'INVALID_STATUS', 'Seuls les devis acceptes ou envoyes peuvent etre convertis');
+    throw new AppError(422, 'INVALID_STATUS', 'Seuls les devis acceptés ou envoyés peuvent etre convertis');
   }
 
   return prisma.$transaction(async (tx) => {

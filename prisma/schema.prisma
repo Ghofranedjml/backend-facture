@@ -15,31 +15,70 @@ datasource db {
 // ─────────────────────────────────────────
 
 enum InvoiceStatus {
-  DRAFT     // Brouillon — éditable librement
-  ISSUED    // Émise — envoyée au client
-  OVERDUE   // En retard — échéance dépassée
-  PAID      // Payée — statut final
+  DRAFT // Brouillon — éditable librement
+  ISSUED // Émise — envoyée au client
+  OVERDUE // En retard — échéance dépassée
+  PAID // Payée — statut final
   CANCELLED // Annulée — statut final
 }
 
 enum Currency {
+  // North Africa
   TND
+  DZD
+  MAD
+  LYD
+  EGP
+
+  // GCC Countries
+  SAR
+  AED
+  QAR
+  OMR
+  KWD
+  BHD
+
+  // Other Middle East
+  JOD
+  LBP
+  SYP
+  IQD
+  IRR
+  YER
+
+  // International
   EUR
   USD
 }
 
+enum QuotationStatus {
+  DRAFT // Brouillon - editable
+  SENT // Envoyé / En attente
+  ACCEPTED // Accepté
+  REFUSED // Rejeté
+  EXPIRED // Expiré
+  CONVERTED // Converti en facture
+}
+
+enum VatSystem {
+  STANDARD // Tunisia, Morocco, Egypt
+  GCC // Saudi, UAE, Qatar, Oman, Kuwait, Bahrain
+  CEMAC // Central Africa
+  NONE // Libya, Yemen (no VAT)
+}
+
 enum VatRate {
-  ZERO       // 0%  — exportations, produits exonérés
-  SEVEN      // 7%  — produits de première nécessité
-  THIRTEEN   // 13% — services bancaires, assurance
-  NINETEEN   // 19% — taux standard (services informatiques, conseil)
+  ZERO // 0%  — exportations, produits exonérés
+  SEVEN // 7%  — produits de première nécessité
+  THIRTEEN // 13% — services bancaires, assurance
+  NINETEEN // 19% — taux standard (services informatiques, conseil)
 }
 
 enum WithholdingTaxType {
-  NONE          // Pas de retenue
-  HONORAIRES    // 15% — professions libérales, consultants
-  LOYERS        // 15% — locations immobilières
-  MARCHES       // 1.5% — marchés publics
+  NONE // Pas de retenue
+  HONORAIRES // 15% — professions libérales, consultants
+  LOYERS // 15% — locations immobilières
+  MARCHES // 1.5% — marchés publics
 }
 
 // ─────────────────────────────────────────
@@ -47,17 +86,20 @@ enum WithholdingTaxType {
 // ─────────────────────────────────────────
 
 model Client {
-  id        String   @id @default(cuid())
-  userId    String   @map("user_id")         // Multi-tenant: owner
-  name      String                           // Raison sociale / Nom
-  taxId     String?  @map("tax_id")          // Matricule fiscal tunisien
-  address   String?
-  email     String?
-  phone     String?
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt              @map("updated_at")
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id") // Multi-tenant: owner
+  name        String // Raison sociale / Nom
+  taxId       String?  @map("tax_id") // Matricule fiscal tunisien
+  address     String?
+  email       String?
+  phone       String?
+  countryCode String?  @map("country_code")
+  country     Country? @relation(fields: [countryCode], references: [code])
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
 
-  invoices Invoice[]
+  invoices   Invoice[]
+  quotations Quotation[]
 
   @@index([userId])
   @@map("clients")
@@ -68,21 +110,24 @@ model Client {
 // ─────────────────────────────────────────
 
 model Invoice {
-  id            String        @id @default(cuid())
-  invoiceNumber String        @unique @map("invoice_number") // FAC-2026-001
-  userId        String        @map("user_id")               // Multi-tenant: owner
-  clientId      String        @map("client_id")
-  contractId    String?       @map("contract_id")           // Liaison optionnelle contrat E-Tafakna
+  id            String  @id @default(cuid())
+  invoiceNumber String  @unique @map("invoice_number") // FAC-2026-001
+  userId        String  @map("user_id") // Multi-tenant: owner
+  clientId      String  @map("client_id")
+  contractId    String? @map("contract_id") // Liaison optionnelle contrat E-Tafakna
+  quotationId   String? @map("quotation_id")
+  countryCode   String? @map("country_code")
+  autoDetected  Boolean @default(false) @map("auto_detected")
 
-  status        InvoiceStatus @default(DRAFT)
-  currency      Currency      @default(TND)
+  status   InvoiceStatus @default(DRAFT)
+  currency Currency      @default(TND)
 
   // Fiscalité tunisienne
-  subtotal          Decimal @default(0) @db.Decimal(15, 3) // Total HT
-  totalVat          Decimal @default(0) @db.Decimal(15, 3) // TVA cumulée
-  stampDuty         Decimal @default(0) @db.Decimal(15, 3) // Timbre fiscal (0 ou 1 TND)
-  withholdingTax    Decimal @default(0) @db.Decimal(15, 3) // Retenue à la source
-  total             Decimal @default(0) @db.Decimal(15, 3) // Total TTC
+  subtotal       Decimal @default(0) @db.Decimal(15, 3) // Total HT
+  totalVat       Decimal @default(0) @db.Decimal(15, 3) // TVA cumulée
+  stampDuty      Decimal @default(0) @db.Decimal(15, 3) // Timbre fiscal (0 ou 1 TND)
+  withholdingTax Decimal @default(0) @db.Decimal(15, 3) // Retenue à la source
+  total          Decimal @default(0) @db.Decimal(15, 3) // Total TTC
 
   withholdingTaxType WithholdingTaxType @default(NONE) @map("withholding_tax_type")
 
@@ -92,24 +137,27 @@ model Invoice {
   paidDate  DateTime? @map("paid_date")
 
   // Méta
-  notes         String?
-  pdfUrl        String? @map("pdf_url")   // Azure Blob Storage URL
-  emailSentAt   DateTime? @map("email_sent_at")
+  notes       String?
+  pdfUrl      String?   @map("pdf_url") // Azure Blob Storage URL
+  emailSentAt DateTime? @map("email_sent_at")
 
   // Relances automatiques
   reminderSentAt Json? @map("reminder_sent_at") // { "7": DateTime, "15": DateTime, "30": DateTime }
 
   createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt      @map("updated_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  client       Client        @relation(fields: [clientId], references: [id])
-  lines        InvoiceLine[]
-  auditLogs    AuditLog[]
+  client    Client        @relation(fields: [clientId], references: [id])
+  country   Country?      @relation(fields: [countryCode], references: [code])
+  lines     InvoiceLine[]
+  auditLogs AuditLog[]
+  Quotation Quotation?
 
   @@index([userId])
   @@index([status])
   @@index([dueDate])
   @@index([clientId])
+  @@index([quotationId])
   @@map("invoices")
 }
 
@@ -120,7 +168,7 @@ model Invoice {
 model InvoiceLine {
   id          String   @id @default(cuid())
   invoiceId   String   @map("invoice_id")
-  position    Int      @default(0)           // Ordre d'affichage
+  position    Int      @default(0) // Ordre d'affichage
   description String
   quantity    Decimal  @db.Decimal(10, 3)
   unitPrice   Decimal  @map("unit_price") @db.Decimal(15, 3) // Prix unitaire HT
@@ -139,18 +187,151 @@ model InvoiceLine {
 // ─────────────────────────────────────────
 
 model AuditLog {
-  id        String   @id @default(cuid())
-  invoiceId String   @map("invoice_id")
-  userId    String   @map("user_id")
-  action    String   // ex: "CREATED", "VALIDATED", "PAID", "EMAIL_SENT", "PDF_GENERATED"
+  id         String         @id @default(cuid())
+  invoiceId  String         @map("invoice_id")
+  userId     String         @map("user_id")
+  action     String // ex: "CREATED", "VALIDATED", "PAID", "EMAIL_SENT", "PDF_GENERATED"
   fromStatus InvoiceStatus? @map("from_status")
   toStatus   InvoiceStatus? @map("to_status")
-  metadata  Json?           // données supplémentaires (montants, email destinataire, etc.)
-  createdAt DateTime @default(now()) @map("created_at")
+  metadata   Json? // données supplémentaires (montants, email destinataire, etc.)
+  createdAt  DateTime       @default(now()) @map("created_at")
 
   invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
   @@index([invoiceId])
   @@index([userId])
   @@map("audit_logs")
+}
+
+model Country {
+  code         String   @id
+  name         String
+  currencyCode Currency @map("currency_code")
+  phoneCode    String   @map("phone_code")
+
+  // Fiscal rules
+  vatSystem       VatSystem @default(STANDARD)
+  hasVat          Boolean   @default(true)
+  hasStampDuty    Boolean   @default(true) @map("has_stamp_duty")
+  stampDutyAmount Decimal?  @default(1) @map("stamp_duty_amount") @db.Decimal(15, 3)
+  defaultVatRate  Float     @default(19) @map("default_vat_rate")
+
+  // Detection keywords for address parsing
+  keywords String[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  clients    Client[]
+  quotations Quotation[]
+  invoices   Invoice[]
+
+  @@map("countries")
+}
+
+model VatCategory {
+  id        String   @id @default(cuid())
+  name      String // "Consulting", "Software", "Food", "Banking"
+  rules     Json? // { "TN": 19, "MA": 20, "EG": 14, "default": 19 }
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  quotations Quotation[]
+
+  @@map("vat_categories")
+}
+
+model Quotation {
+  id              String  @id @default(cuid())
+  quotationNumber String  @unique @map("quotation_number")
+  userId          String  @map("user_id")
+  clientId        String  @map("client_id")
+  contractId      String? @map("contract_id")
+
+  // Status
+  status QuotationStatus @default(DRAFT)
+
+  // Financial
+  currency           Currency           @default(TND)
+  subtotal           Decimal            @default(0) @db.Decimal(15, 3)
+  totalVat           Decimal            @default(0) @db.Decimal(15, 3)
+  stampDuty          Decimal            @default(1) @db.Decimal(15, 3)
+  withholdingTax     Decimal            @default(0) @db.Decimal(15, 3)
+  total              Decimal            @default(0) @db.Decimal(15, 3)
+  withholdingTaxType WithholdingTaxType @default(NONE) @map("withholding_tax_type")
+
+  // VAT Mode (manual vs intelligent)
+  manualVatRate     Float?  @map("manual_vat_rate")
+  vatCategoryId     String? @map("vat_category_id")
+  detectedVatRate   Float?  @map("detected_vat_rate")
+  useIntelligentVat Boolean @default(false) @map("use_intelligent_vat")
+
+  // Country for fiscal rules
+  countryCode  String? @map("country_code")
+  autoDetected Boolean @default(false) @map("auto_detected")
+
+  // Dates
+  issueDate   DateTime  @default(now()) @map("issue_date")
+  validUntil  DateTime  @map("valid_until")
+  emailSentAt DateTime? @map("email_sent_at")
+  acceptedAt  DateTime? @map("accepted_at")
+  convertedAt DateTime? @map("converted_at")
+
+  // Links
+  convertedToInvoiceId String? @unique @map("converted_to_invoice_id")
+
+  // Content
+  notes       String?
+  description String? // Objet du devis
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  client           Client          @relation(fields: [clientId], references: [id])
+  country          Country?        @relation(fields: [countryCode], references: [code])
+  vatCategory      VatCategory?    @relation(fields: [vatCategoryId], references: [id])
+  lines            QuotationLine[]
+  convertedInvoice Invoice?        @relation(fields: [convertedToInvoiceId], references: [id])
+
+  @@index([userId])
+  @@index([clientId])
+  @@index([status])
+  @@index([issueDate])
+  @@index([quotationNumber])
+  @@index([countryCode])
+  @@map("quotations")
+}
+
+model QuotationLine {
+  id          String   @id @default(cuid())
+  quotationId String   @map("quotation_id")
+  position    Int      @default(0)
+  description String
+  quantity    Decimal  @db.Decimal(10, 3)
+  unitPrice   Decimal  @map("unit_price") @db.Decimal(15, 3)
+  vatRate     Float    @map("vat_rate")
+  lineTotal   Decimal  @map("line_total") @db.Decimal(15, 3)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  quotation Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+
+  @@index([quotationId])
+  @@map("quotation_lines")
+}
+
+model ExchangeRate {
+  id            String   @id @default(cuid())
+  fromCurrency  Currency @map("from_currency")
+  toCurrency    Currency @map("to_currency")
+  rate          Decimal  @db.Decimal(15, 6)
+  effectiveDate DateTime @default(now()) @map("effective_date")
+  isActive      Boolean  @default(true)
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@unique([fromCurrency, toCurrency, effectiveDate])
+  @@index([fromCurrency, toCurrency, isActive])
+  @@map("exchange_rates")
 }

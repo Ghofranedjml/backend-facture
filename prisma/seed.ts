@@ -1,7 +1,67 @@
 import 'dotenv/config';
-import { PrismaClient, InvoiceStatus, Currency, VatRate, WithholdingTaxType } from '@prisma/client';
+import { PrismaClient, InvoiceStatus, Currency, VatRate, WithholdingTaxType, VatSystem } from '@prisma/client';
 
 const prisma = new PrismaClient();
+
+async function seedMenaData() {
+  console.log('🌍 Seeding MENA countries...');
+
+  const menaCountries = [
+    // North Africa
+    { code: 'TN', name: 'Tunisia', currencyCode: Currency.TND, phoneCode: '+216', vatSystem: VatSystem.STANDARD, hasStampDuty: true, stampDutyAmount: 1, defaultVatRate: 19, keywords: ['tunis', 'tunisie', 'تونس', 'tn'] },
+    { code: 'DZ', name: 'Algeria', currencyCode: Currency.DZD, phoneCode: '+213', vatSystem: VatSystem.STANDARD, hasStampDuty: true, stampDutyAmount: 1, defaultVatRate: 19, keywords: ['alger', 'algérie', 'الجزائر', 'dz'] },
+    { code: 'MA', name: 'Morocco', currencyCode: Currency.MAD, phoneCode: '+212', vatSystem: VatSystem.STANDARD, hasStampDuty: true, stampDutyAmount: 1, defaultVatRate: 20, keywords: ['maroc', 'morocco', 'المغرب', 'ma'] },
+    { code: 'LY', name: 'Libya', currencyCode: Currency.LYD, phoneCode: '+218', vatSystem: VatSystem.NONE, hasStampDuty: false, defaultVatRate: 0, keywords: ['libye', 'libya', 'ليبيا', 'ly'] },
+    { code: 'EG', name: 'Egypt', currencyCode: Currency.EGP, phoneCode: '+20', vatSystem: VatSystem.STANDARD, hasStampDuty: true, stampDutyAmount: 1, defaultVatRate: 14, keywords: ['egypte', 'egypt', 'مصر', 'eg'] },
+    
+    // GCC Countries
+    { code: 'SA', name: 'Saudi Arabia', currencyCode: Currency.SAR, phoneCode: '+966', vatSystem: VatSystem.GCC, hasStampDuty: false, defaultVatRate: 15, keywords: ['saudi', 'arabie', 'saoudite', 'sa'] },
+    { code: 'AE', name: 'United Arab Emirates', currencyCode: Currency.AED, phoneCode: '+971', vatSystem: VatSystem.GCC, hasStampDuty: false, defaultVatRate: 5, keywords: ['emirates', 'uae', 'emirats', 'ae'] },
+    { code: 'QA', name: 'Qatar', currencyCode: Currency.QAR, phoneCode: '+974', vatSystem: VatSystem.GCC, hasStampDuty: false, defaultVatRate: 0, keywords: ['qatar', 'قطر', 'qa'] },
+    { code: 'KW', name: 'Kuwait', currencyCode: Currency.KWD, phoneCode: '+965', vatSystem: VatSystem.GCC, hasStampDuty: false, defaultVatRate: 0, keywords: ['kuwait', 'الكويت', 'kw'] },
+    { code: 'BH', name: 'Bahrain', currencyCode: Currency.BHD, phoneCode: '+973', vatSystem: VatSystem.GCC, hasStampDuty: false, defaultVatRate: 10, keywords: ['bahrain', 'البحرين', 'bh'] },
+    { code: 'OM', name: 'Oman', currencyCode: Currency.OMR, phoneCode: '+968', vatSystem: VatSystem.GCC, hasStampDuty: false, defaultVatRate: 5, keywords: ['oman', 'عمان', 'om'] },
+    
+    // Other Middle East
+    { code: 'JO', name: 'Jordan', currencyCode: Currency.JOD, phoneCode: '+962', vatSystem: VatSystem.STANDARD, hasStampDuty: true, stampDutyAmount: 1, defaultVatRate: 16, keywords: ['jordan', 'jordanie', 'الأردن', 'jo'] },
+    { code: 'LB', name: 'Lebanon', currencyCode: Currency.LBP, phoneCode: '+961', vatSystem: VatSystem.STANDARD, hasStampDuty: false, defaultVatRate: 11, keywords: ['lebanon', 'liban', 'لبنان', 'lb'] },
+    { code: 'IQ', name: 'Iraq', currencyCode: Currency.IQD, phoneCode: '+964', vatSystem: VatSystem.NONE, hasStampDuty: false, defaultVatRate: 0, keywords: ['iraq', 'irak', 'العراق', 'iq'] },
+    { code: 'YE', name: 'Yemen', currencyCode: Currency.YER, phoneCode: '+967', vatSystem: VatSystem.NONE, hasStampDuty: false, defaultVatRate: 0, keywords: ['yemen', 'yémen', 'اليمن', 'ye'] },
+    { code: 'SY', name: 'Syria', currencyCode: Currency.SYP, phoneCode: '+963', vatSystem: VatSystem.NONE, hasStampDuty: false, defaultVatRate: 0, keywords: ['syria', 'syrie', 'سوريا', 'sy'] },
+  ];
+
+  for (const country of menaCountries) {
+    await prisma.country.upsert({
+      where: { code: country.code },
+      update: country,
+      create: country,
+    });
+  }
+
+  console.log('✅ MENA countries seeded');
+
+  console.log('🏷️ Seeding VAT categories...');
+
+  const vatCategories = [
+    { id: 'consulting', name: 'Consulting', rules: { TN: 19, MA: 20, EG: 14, SA: 15, AE: 5, DZ: 19, default: 19 } },
+    { id: 'software', name: 'Software', rules: { TN: 19, MA: 20, EG: 14, SA: 15, AE: 5, default: 19 } },
+    { id: 'banking', name: 'Banking', rules: { TN: 13, MA: 14, EG: 14, SA: 15, AE: 5, default: 13 } },
+    { id: 'food', name: 'Food', rules: { TN: 7, MA: 7, EG: 5, SA: 0, AE: 0, default: 7 } },
+    { id: 'medical', name: 'Medical', rules: { TN: 7, MA: 7, EG: 5, SA: 0, AE: 0, default: 7 } },
+    { id: 'education', name: 'Education', rules: { TN: 0, MA: 0, EG: 0, SA: 0, AE: 0, default: 0 } },
+    { id: 'export', name: 'Export', rules: { TN: 0, MA: 0, EG: 0, SA: 0, AE: 0, default: 0 } },
+  ];
+
+  for (const category of vatCategories) {
+    await prisma.vatCategory.upsert({
+      where: { id: category.id },
+      update: category,
+      create: category,
+    });
+  }
+
+  console.log('✅ VAT categories seeded');
+}
 
 async function main(): Promise<void> {
   console.log('🌱 Seeding database...');
@@ -11,6 +71,13 @@ async function main(): Promise<void> {
   await prisma.invoiceLine.deleteMany();
   await prisma.invoice.deleteMany();
   await prisma.client.deleteMany();
+  await prisma.quotationLine.deleteMany();
+  await prisma.quotation.deleteMany();
+  await prisma.country.deleteMany();
+  await prisma.vatCategory.deleteMany();
+
+  // Seed MENA data first
+  await seedMenaData();
 
   const userId = 'dev-user-001'; // Simule un user JWT en dev
 
@@ -23,6 +90,7 @@ async function main(): Promise<void> {
       address: 'Avenue Habib Bourguiba, Tunis 1001',
       email: 'facturation@tunisietelecom.tn',
       phone: '+216 71 801 800',
+      countryCode: 'TN',
     },
   });
 
@@ -34,6 +102,7 @@ async function main(): Promise<void> {
       address: 'Rue Hédi Nouira, Tunis 1001',
       email: 'finance@bna.tn',
       phone: '+216 71 831 000',
+      countryCode: 'TN',
     },
   });
 
@@ -45,6 +114,7 @@ async function main(): Promise<void> {
       address: 'Rue de la Loi, Cité des Avocats, Tunis',
       email: 'cabinet.haddad@gmail.com',
       phone: '+216 71 282 040',
+      countryCode: 'TN',
     },
   });
 
@@ -70,6 +140,7 @@ async function main(): Promise<void> {
       dueDate: new Date('2026-02-14'),
       paidDate: new Date('2026-02-10'),
       notes: 'Paiement reçu par virement',
+      countryCode: 'TN',
       lines: {
         create: [
           {
@@ -102,13 +173,14 @@ async function main(): Promise<void> {
       status: InvoiceStatus.ISSUED,
       currency: Currency.TND,
       subtotal: 5000,
-      totalVat: 650, // 13% (banque)
-      stampDuty: 0,  // Exonéré (secteur bancaire)
+      totalVat: 650,
+      stampDuty: 0,
       withholdingTax: 0,
       total: 5650,
       withholdingTaxType: WithholdingTaxType.NONE,
       issueDate: new Date('2026-03-01'),
       dueDate: new Date('2026-03-31'),
+      countryCode: 'TN',
       lines: {
         create: [
           {
@@ -116,7 +188,7 @@ async function main(): Promise<void> {
             description: 'Intégration API signature électronique — BNA',
             quantity: 1,
             unitPrice: 5000,
-            vatRate: VatRate.THIRTEEN, // 13% services bancaires
+            vatRate: VatRate.THIRTEEN,
             lineTotal: 5000,
           },
         ],
@@ -135,11 +207,12 @@ async function main(): Promise<void> {
       subtotal: 3000,
       totalVat: 570,
       stampDuty: 1,
-      withholdingTax: 450, // 15% RAS honoraires
+      withholdingTax: 450,
       total: 3121,
       withholdingTaxType: WithholdingTaxType.HONORAIRES,
       issueDate: new Date('2026-02-01'),
       dueDate: new Date('2026-03-01'),
+      countryCode: 'TN',
       lines: {
         create: [
           {
@@ -171,6 +244,7 @@ async function main(): Promise<void> {
       withholdingTaxType: WithholdingTaxType.NONE,
       issueDate: new Date('2026-03-20'),
       dueDate: new Date('2026-04-19'),
+      countryCode: 'TN',
       lines: {
         create: [
           {

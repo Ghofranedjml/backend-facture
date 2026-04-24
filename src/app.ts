@@ -9,8 +9,11 @@ import { config } from './config/env';
 import { errorHandler } from './middlewares/error.middleware';
 import { logger } from './config/logger';
 
+
 import invoiceRoutes from './routes/invoices.routes';
 import clientRoutes from './routes/clients.routes';
+import dashboardRoutes from './routes/dashboard.routes';
+import quotationsRoutes from './routes/quotations.routes';
 
 const app = express();
 
@@ -48,8 +51,11 @@ app.get('/health', (_req, res) => {
 // ── API Routes ──────────────────────────────
 const router = express.Router();
 
+
 router.use('/invoices', invoiceRoutes);
 router.use('/clients', clientRoutes);
+router.use('/dashboard', dashboardRoutes);
+router.use('/quotations', quotationsRoutes);
 
 router.get('/', (_req, res) => {
   res.json({
@@ -57,7 +63,7 @@ router.get('/', (_req, res) => {
     data: {
       message: 'E-Tafakna Billing API',
       version: '1.0.0',
-      endpoints: ['/invoices', '/invoices/stats', '/clients'],
+      endpoints: ['/invoices', '/invoices/stats', '/clients', '/dashboard/stats', '/quotations'],
     },
   });
 });

@@ -88,6 +88,7 @@ export interface TaxBreakdown {
   total: number;          // Total TTC
 }
 
+
 // ─── Invoice query filters ─────────────────
 export interface InvoiceFilters {
   status?: InvoiceStatus;
@@ -99,3 +100,6 @@ export interface InvoiceFilters {
   page?: number;
   limit?: number;
 }
+
+// ─── Dashboard types ───────────────────────
+export * from './dashboard.types';
