@@ -1,0 +1,156 @@
+// E-Tafakna — Billing Module
+// Prisma Schema — PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────
+
+enum InvoiceStatus {
+  DRAFT     // Brouillon — éditable librement
+  ISSUED    // Émise — envoyée au client
+  OVERDUE   // En retard — échéance dépassée
+  PAID      // Payée — statut final
+  CANCELLED // Annulée — statut final
+}
+
+enum Currency {
+  TND
+  EUR
+  USD
+}
+
+enum VatRate {
+  ZERO       // 0%  — exportations, produits exonérés
+  SEVEN      // 7%  — produits de première nécessité
+  THIRTEEN   // 13% — services bancaires, assurance
+  NINETEEN   // 19% — taux standard (services informatiques, conseil)
+}
+
+enum WithholdingTaxType {
+  NONE          // Pas de retenue
+  HONORAIRES    // 15% — professions libérales, consultants
+  LOYERS        // 15% — locations immobilières
+  MARCHES       // 1.5% — marchés publics
+}
+
+// ─────────────────────────────────────────
+// CLIENT
+// ─────────────────────────────────────────
+
+model Client {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")         // Multi-tenant: owner
+  name      String                           // Raison sociale / Nom
+  taxId     String?  @map("tax_id")          // Matricule fiscal tunisien
+  address   String?
+  email     String?
+  phone     String?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt              @map("updated_at")
+
+  invoices Invoice[]
+
+  @@index([userId])
+  @@map("clients")
+}
+
+// ─────────────────────────────────────────
+// INVOICE
+// ─────────────────────────────────────────
+
+model Invoice {
+  id            String        @id @default(cuid())
+  invoiceNumber String        @unique @map("invoice_number") // FAC-2026-001
+  userId        String        @map("user_id")               // Multi-tenant: owner
+  clientId      String        @map("client_id")
+  contractId    String?       @map("contract_id")           // Liaison optionnelle contrat E-Tafakna
+
+  status        InvoiceStatus @default(DRAFT)
+  currency      Currency      @default(TND)
+
+  // Fiscalité tunisienne
+  subtotal          Decimal @default(0) @db.Decimal(15, 3) // Total HT
+  totalVat          Decimal @default(0) @db.Decimal(15, 3) // TVA cumulée
+  stampDuty         Decimal @default(0) @db.Decimal(15, 3) // Timbre fiscal (0 ou 1 TND)
+  withholdingTax    Decimal @default(0) @db.Decimal(15, 3) // Retenue à la source
+  total             Decimal @default(0) @db.Decimal(15, 3) // Total TTC
+
+  withholdingTaxType WithholdingTaxType @default(NONE) @map("withholding_tax_type")
+
+  // Dates
+  issueDate DateTime  @map("issue_date")
+  dueDate   DateTime  @map("due_date")
+  paidDate  DateTime? @map("paid_date")
+
+  // Méta
+  notes         String?
+  pdfUrl        String? @map("pdf_url")   // Azure Blob Storage URL
+  emailSentAt   DateTime? @map("email_sent_at")
+
+  // Relances automatiques
+  reminderSentAt Json? @map("reminder_sent_at") // { "7": DateTime, "15": DateTime, "30": DateTime }
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
+
+  client       Client        @relation(fields: [clientId], references: [id])
+  lines        InvoiceLine[]
+  auditLogs    AuditLog[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([dueDate])
+  @@index([clientId])
+  @@map("invoices")
+}
+
+// ─────────────────────────────────────────
+// INVOICE LINE
+// ─────────────────────────────────────────
+
+model InvoiceLine {
+  id          String   @id @default(cuid())
+  invoiceId   String   @map("invoice_id")
+  position    Int      @default(0)           // Ordre d'affichage
+  description String
+  quantity    Decimal  @db.Decimal(10, 3)
+  unitPrice   Decimal  @map("unit_price") @db.Decimal(15, 3) // Prix unitaire HT
+  vatRate     VatRate  @map("vat_rate")
+  lineTotal   Decimal  @map("line_total") @db.Decimal(15, 3) // quantity × unitPrice
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("invoice_lines")
+}
+
+// ─────────────────────────────────────────
+// AUDIT LOG
+// ─────────────────────────────────────────
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  invoiceId String   @map("invoice_id")
+  userId    String   @map("user_id")
+  action    String   // ex: "CREATED", "VALIDATED", "PAID", "EMAIL_SENT", "PDF_GENERATED"
+  fromStatus InvoiceStatus? @map("from_status")
+  toStatus   InvoiceStatus? @map("to_status")
+  metadata  Json?           // données supplémentaires (montants, email destinataire, etc.)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@index([userId])
+  @@map("audit_logs")
+}
