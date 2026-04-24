@@ -1,10 +1,10 @@
 export interface FiscalEngineInput {
   amountHT: number;
-  currency: string;
-  country: string;          // code ISO 2 lettres ex: 'TN', 'MA', 'SA'
+  serviceDescription: string;  // Key new field!
+  clientAddress: string | null | undefined;
   clientType: 'PRO' | 'INDIVIDUAL';
   withholdingTaxType?: 'NONE' | 'HONORAIRES' | 'LOYERS' | 'MARCHES';
-  taxOverride?: {
+  manualOverride?: {
     tva?: number;
     timbre?: number;
     ras?: number;
@@ -12,337 +12,293 @@ export interface FiscalEngineInput {
 }
 
 export interface FiscalEngineOutput {
-  tva: number;
-  timbre: number;
-  ras: number;
+  detectedCountry: string;
+  detectedCurrency: string;
+  tvaRate: number;
+  tvaAmount: number;
+  timbreAmount: number;
+  rasAmount: number;
   totalTTC: number;
-  details: {
-    tvaRate: number;
-    rasRate: number;
-    appliedRules: string[];
-    country: string;
-    currency: string;
-  };
+  appliedRules: string[];
 }
 
-// ─── Règles fiscales par pays MENA ────────────────────────
-const COUNTRY_RULES: Record<string, {
+// ─── Country → Currency + Address keywords ─────────────────
+const COUNTRY_DATA: Record<string, {
   name: string;
-  isLocal: boolean;          // true = règles locales s'appliquent
-  tvaRate: number;           // taux TVA standard %
-  stampDutyThreshold: number; // seuil timbre (0 = pas de timbre)
-  stampDutyAmount: number;   // montant fixe timbre
+  currency: string;
+  keywords: string[];
+  defaultVatRate: number;
+  hasStampDuty: boolean;
+  stampDutyAmount: number;
+  stampDutyThreshold: number;
 }> = {
-  // ── Maghreb ──────────────────────────────────────────────
-  TN: { name: 'Tunisie',     isLocal: true,  tvaRate: 19, stampDutyThreshold: 1000, stampDutyAmount: 1 },
-  MA: { name: 'Maroc',       isLocal: false, tvaRate: 20, stampDutyThreshold: 0,    stampDutyAmount: 0 },
-  DZ: { name: 'Algérie',     isLocal: false, tvaRate: 19, stampDutyThreshold: 0,    stampDutyAmount: 0 },
-  LY: { name: 'Libye',       isLocal: false, tvaRate: 0,  stampDutyThreshold: 0,    stampDutyAmount: 0 },
-  MR: { name: 'Mauritanie',  isLocal: false, tvaRate: 16, stampDutyThreshold: 0,    stampDutyAmount: 0 },
-
-  // ── Mashreq ──────────────────────────────────────────────
-  EG: { name: 'Égypte',      isLocal: false, tvaRate: 14, stampDutyThreshold: 0,    stampDutyAmount: 0 },
-  LB: { name: 'Liban',       isLocal: false, tvaRate: 11, stampDutyThreshold: 0,    stampDutyAmount: 0 },
-  JO: { name: 'Jordanie',    isLocal: false, tvaRate: 16, stampDutyThreshold: 0,    stampDutyAmount: 0 },
-  SY: { name: 'Syrie',       isLocal: false, tvaRate: 11, stampDutyThreshold: 0,    stampDutyAmount: 0 },
-  IQ: { name: 'Irak',        isLocal: false, tvaRate: 0,  stampDutyThreshold: 0,    stampDutyAmount: 0 },
-  SD: { name: 'Soudan',      isLocal: false, tvaRate: 17, stampDutyThreshold: 0,    stampDutyAmount: 0 },
-  YE: { name: 'Yémen',       isLocal: false, tvaRate: 5,  stampDutyThreshold: 0,    stampDutyAmount: 0 },
-
-  // ── Golfe ────────────────────────────────────────────────
-  SA: { name: 'Arabie Saoudite', isLocal: false, tvaRate: 15, stampDutyThreshold: 0, stampDutyAmount: 0 },
-  AE: { name: 'Émirats Arabes', isLocal: false, tvaRate: 5,  stampDutyThreshold: 0,  stampDutyAmount: 0 },
-  QA: { name: 'Qatar',       isLocal: false, tvaRate: 0,  stampDutyThreshold: 0,    stampDutyAmount: 0 },
-  KW: { name: 'Koweït',      isLocal: false, tvaRate: 0,  stampDutyThreshold: 0,    stampDutyAmount: 0 },
-  BH: { name: 'Bahreïn',     isLocal: false, tvaRate: 10, stampDutyThreshold: 0,    stampDutyAmount: 0 },
-  OM: { name: 'Oman',        isLocal: false, tvaRate: 5,  stampDutyThreshold: 0,    stampDutyAmount: 0 },
-
-  // ── Europe / International ───────────────────────────────
-  FR: { name: 'France',      isLocal: false, tvaRate: 0,  stampDutyThreshold: 0,    stampDutyAmount: 0 },
-  DE: { name: 'Allemagne',   isLocal: false, tvaRate: 0,  stampDutyThreshold: 0,    stampDutyAmount: 0 },
-  GB: { name: 'Royaume-Uni', isLocal: false, tvaRate: 0,  stampDutyThreshold: 0,    stampDutyAmount: 0 },
-  US: { name: 'États-Unis',  isLocal: false, tvaRate: 0,  stampDutyThreshold: 0,    stampDutyAmount: 0 },
+  // North Africa
+  TN: { name: 'Tunisia', currency: 'TND', keywords: ['tunis', 'tunisie', 'تونس', 'tn'], defaultVatRate: 19, hasStampDuty: true, stampDutyAmount: 1, stampDutyThreshold: 1000 },
+  DZ: { name: 'Algeria', currency: 'DZD', keywords: ['alger', 'algérie', 'الجزائر', 'dz'], defaultVatRate: 19, hasStampDuty: false, stampDutyAmount: 0, stampDutyThreshold: 0 },
+  MA: { name: 'Morocco', currency: 'MAD', keywords: ['maroc', 'morocco', 'المغرب', 'ma'], defaultVatRate: 20, hasStampDuty: false, stampDutyAmount: 0, stampDutyThreshold: 0 },
+  LY: { name: 'Libya', currency: 'LYD', keywords: ['libye', 'libya', 'ليبيا', 'ly'], defaultVatRate: 0, hasStampDuty: false, stampDutyAmount: 0, stampDutyThreshold: 0 },
+  EG: { name: 'Egypt', currency: 'EGP', keywords: ['egypte', 'egypt', 'مصر', 'eg'], defaultVatRate: 14, hasStampDuty: false, stampDutyAmount: 0, stampDutyThreshold: 0 },
+  
+  // GCC
+  SA: { name: 'Saudi Arabia', currency: 'SAR', keywords: ['saudi', 'arabie', 'saoudite', 'sa'], defaultVatRate: 15, hasStampDuty: false, stampDutyAmount: 0, stampDutyThreshold: 0 },
+  AE: { name: 'UAE', currency: 'AED', keywords: ['emirates', 'uae', 'emirats', 'ae', 'dubai', 'dubaï', 'abudhabi'], defaultVatRate: 5, hasStampDuty: false, stampDutyAmount: 0, stampDutyThreshold: 0 },
+  QA: { name: 'Qatar', currency: 'QAR', keywords: ['qatar', 'قطر', 'qa'], defaultVatRate: 0, hasStampDuty: false, stampDutyAmount: 0, stampDutyThreshold: 0 },
+  KW: { name: 'Kuwait', currency: 'KWD', keywords: ['kuwait', 'koweït', 'الكويت', 'kw'], defaultVatRate: 0, hasStampDuty: false, stampDutyAmount: 0, stampDutyThreshold: 0 },
+  BH: { name: 'Bahrain', currency: 'BHD', keywords: ['bahrain', 'البحرين', 'bh'], defaultVatRate: 10, hasStampDuty: false, stampDutyAmount: 0, stampDutyThreshold: 0 },
+  OM: { name: 'Oman', currency: 'OMR', keywords: ['oman', 'عمان', 'om'], defaultVatRate: 5, hasStampDuty: false, stampDutyAmount: 0, stampDutyThreshold: 0 },
+  
+  // Other
+  JO: { name: 'Jordan', currency: 'JOD', keywords: ['jordan', 'jordanie', 'الأردن', 'jo'], defaultVatRate: 16, hasStampDuty: false, stampDutyAmount: 0, stampDutyThreshold: 0 },
+  LB: { name: 'Lebanon', currency: 'LBP', keywords: ['lebanon', 'liban', 'لبنان', 'lb'], defaultVatRate: 11, hasStampDuty: false, stampDutyAmount: 0, stampDutyThreshold: 0 },
 };
 
-// ─── Mapping mot → code ISO ───────────────────────────────
-// Permet de lire le pays depuis le dernier mot de l'adresse
-const CITY_TO_COUNTRY: Record<string, string> = {
-  // Tunisie
-  'tunis': 'TN', 'sfax': 'TN', 'sousse': 'TN', 'bizerte': 'TN',
-  'kairouan': 'TN', 'monastir': 'TN', 'nabeul': 'TN', 'gafsa': 'TN',
-  'tunisie': 'TN', 'tunisia': 'TN',
-  // Maroc
-  'casablanca': 'MA', 'rabat': 'MA', 'marrakech': 'MA', 'fès': 'MA',
-  'fez': 'MA', 'tanger': 'MA', 'agadir': 'MA', 'maroc': 'MA', 'morocco': 'MA',
-  // Algérie
-  'alger': 'DZ', 'oran': 'DZ', 'constantine': 'DZ', 'algérie': 'DZ', 'algeria': 'DZ',
-  // Égypte
-  'cairo': 'EG', 'caire': 'EG', 'alexandrie': 'EG', 'égypte': 'EG', 'egypt': 'EG',
-  // Arabie Saoudite
-  'riyadh': 'SA', 'jeddah': 'SA', 'djeddah': 'SA', 'mecque': 'SA', 'saudi': 'SA',
-  // Émirats
-  'dubai': 'AE', 'dubaï': 'AE', 'abudhabi': 'AE', 'sharjah': 'AE', 'emirates': 'AE',
-  // Qatar
-  'doha': 'QA', 'qatar': 'QA',
-  // Koweït
-  'kuwait': 'KW', 'koweït': 'KW',
-  // Jordanie
-  'amman': 'JO', 'jordanie': 'JO', 'jordan': 'JO',
-  // Liban
-  'beyrouth': 'LB', 'beirut': 'LB', 'liban': 'LB', 'lebanon': 'LB',
-  // Libye
-  'tripoli': 'LY', 'benghazi': 'LY', 'libye': 'LY', 'libya': 'LY',
-  // France / Europe
-  'paris': 'FR', 'lyon': 'FR', 'marseille': 'FR', 'france': 'FR',
-  'berlin': 'DE', 'munich': 'DE', 'allemagne': 'DE', 'germany': 'DE',
-  'london': 'GB', 'londres': 'GB', 'uk': 'GB',
+// ─── INTELLIGENT VAT RULES: Category + Country → Rate ─────
+// This is the CORE intelligence - system reads description and applies correct rate
+const VAT_RULES: Array<{
+  category: string;
+  keywords: string[];
+  rates: Record<string, number>;  // countryCode -> vatRate
+}> = [
+  {
+    category: 'Standard Consulting',
+    keywords: ['consulting', 'conseil', 'consultant', 'strategy', 'stratégie', 'management', 'it service', 'software', 'logiciel', 'development', 'développement', 'saas', 'platform', 'plateforme'],
+    rates: { TN: 19, MA: 20, EG: 14, SA: 15, AE: 5, DZ: 19, JO: 16, LB: 11, default: 19 }
+  },
+  {
+    category: 'Banking & Financial',
+    keywords: ['bank', 'banque', 'financial', 'financier', 'loan', 'prêt', 'credit', 'insurance', 'assurance', 'investment', 'investissement'],
+    rates: { TN: 13, MA: 14, EG: 14, SA: 15, AE: 5, DZ: 19, default: 13 }
+  },
+  {
+    category: 'Food & Agriculture',
+    keywords: ['food', 'nourriture', 'aliment', 'agriculture', 'agri', 'fruit', 'légume', 'viande', 'meat', 'bread', 'pain'],
+    rates: { TN: 7, MA: 7, EG: 5, SA: 0, AE: 0, DZ: 9, default: 7 }
+  },
+  {
+    category: 'Medical & Healthcare',
+    keywords: ['medical', 'médical', 'health', 'santé', 'medicine', 'médicament', 'clinic', 'clinique', 'hospital', 'hôpital', 'doctor', 'médecin'],
+    rates: { TN: 7, MA: 7, EG: 5, SA: 0, AE: 0, DZ: 9, default: 7 }
+  },
+  {
+    category: 'Education & Training',
+    keywords: ['education', 'formation', 'school', 'école', 'training', 'cours', 'course', 'university', 'université', 'teaching', 'enseignement'],
+    rates: { TN: 0, MA: 0, EG: 0, SA: 0, AE: 0, DZ: 0, default: 0 }
+  },
+  {
+    category: 'Export & International',
+    keywords: ['export', 'exportation', 'international', 'outside', 'hors tunisie', 'foreign', 'étranger', 'cross border'],
+    rates: { TN: 0, MA: 0, EG: 0, SA: 0, AE: 0, DZ: 0, default: 0 }
+  },
+  {
+    category: 'Real Estate & Construction',
+    keywords: ['real estate', 'immobilier', 'construction', 'building', 'bâtiment', 'property', 'propriété', 'rent', 'location'],
+    rates: { TN: 19, MA: 20, EG: 14, SA: 15, AE: 5, default: 19 }
+  },
+  {
+    category: 'Transport & Logistics',
+    keywords: ['transport', 'logistics', 'logistique', 'shipping', 'livraison', 'delivery', 'freight', 'fret'],
+    rates: { TN: 19, MA: 20, EG: 14, SA: 15, AE: 5, default: 19 }
+  }
+];
+
+// ─── Withholding Tax (RAS) Rules ──────────────────────────
+const RAS_RULES: Record<string, {
+  description: string;
+  rate: number;
+  keywords: string[];
+}> = {
+  HONORAIRES: { description: 'Honoraires / Professions libérales', rate: 15, keywords: ['consulting', 'conseil', 'honoraires', 'profession libérale', 'freelance'] },
+  LOYERS: { description: 'Locations immobilières', rate: 15, keywords: ['location', 'loyer', 'rent', 'leasing'] },
+  MARCHES: { description: 'Marchés publics / Sous-traitance', rate: 1.5, keywords: ['marché public', 'sous-traitance', 'public tender'] },
 };
 
-// ─── RAS tunisienne — 3 types ─────────────────────────────
-const RAS_RATES: Record<string, number> = {
-  NONE:        0,
-  HONORAIRES:  15,   // professions libérales, consultants
-  LOYERS:      15,   // locations immobilières
-  MARCHES:     1.5,  // marchés publics
-};
-
-// ─── Taux de change vers TND ──────────────────────────────
+// ─── Exchange Rates (to TND for reference) ─────────────────
 const EXCHANGE_RATES: Record<string, number> = {
-  TND: 1,
-  EUR: 3.35,
-  USD: 3.08,
-  MAD: 0.31,   // Dirham marocain
-  DZD: 0.023,  // Dinar algérien
-  EGP: 0.065,  // Livre égyptienne
-  SAR: 0.82,   // Riyal saoudien
-  AED: 0.84,   // Dirham émirati
-  QAR: 0.85,   // Riyal qatari
-  KWD: 10.1,   // Dinar koweïtien
-  JOD: 4.35,   // Dinar jordanien
-  LBP: 0.00034,// Livre libanaise
-  LYD: 0.64,   // Dinar libyen
-  BHD: 8.2,    // Dinar bahreïni
-  OMR: 8.0,    // Rial omanais
-  GBP: 3.95,   // Livre sterling
+  TND: 1, EUR: 3.35, USD: 3.08, MAD: 0.31, DZD: 0.023, EGP: 0.065,
+  SAR: 0.82, AED: 0.84, QAR: 0.85, KWD: 10.1, JOD: 4.35, LBP: 0.00034,
+  LYD: 0.64, BHD: 8.2, OMR: 8.0, GBP: 3.95,
 };
 
 const round3 = (n: number): number => Math.round(n * 1000) / 1000;
 
-// ─── Extraction pays depuis adresse ───────────────────────
-export function extractCountryFromAddress(address: string | null | undefined): string {
-  if (!address || address.trim() === '') return 'TN'; // défaut Tunisie
-
-  // Prendre le dernier mot non vide de l'adresse
+// ─── Extract country from address (last word) ─────────────
+export function detectCountryFromAddress(address: string | null | undefined): string {
+  if (!address || address.trim() === '') return 'TN';
+  
   const words = address.trim().split(/[\s,]+/).filter(Boolean);
   if (words.length === 0) return 'TN';
-
+  
   const lastWord = words[words.length - 1].toLowerCase().trim();
-
-  // 1. Vérifier si c'est directement un code ISO (ex: "TN", "MA")
   const upperWord = lastWord.toUpperCase();
-  if (COUNTRY_RULES[upperWord]) return upperWord;
-
-  // 2. Chercher dans le mapping ville/pays
-  if (CITY_TO_COUNTRY[lastWord]) return CITY_TO_COUNTRY[lastWord];
-
-  // 3. Essayer aussi l'avant-dernier mot (cas: "1000 Tunis, Tunisie")
+  
+  // Direct match by code
+  if (COUNTRY_DATA[upperWord]) return upperWord;
+  
+  // Match by keyword
+  for (const [code, data] of Object.entries(COUNTRY_DATA)) {
+    if (data.keywords.some(k => lastWord.includes(k) || k.includes(lastWord))) {
+      return code;
+    }
+  }
+  
+  // Check second-to-last word
   if (words.length >= 2) {
     const secondLast = words[words.length - 2].toLowerCase().trim();
-    if (CITY_TO_COUNTRY[secondLast]) return CITY_TO_COUNTRY[secondLast];
+    for (const [code, data] of Object.entries(COUNTRY_DATA)) {
+      if (data.keywords.some(k => secondLast.includes(k) || k.includes(secondLast))) {
+        return code;
+      }
+    }
   }
-
-  // 4. Défaut : Tunisie
-  return 'TN';
+  
+  return 'TN'; // Default Tunisia
 }
 
-// ─── Moteur fiscal principal ──────────────────────────────
+// ─── Detect VAT rate intelligently from description ──────
+function detectVatRate(serviceDescription: string, countryCode: string): { rate: number; category: string } {
+  const lowerDesc = serviceDescription.toLowerCase();
+  
+  // Find matching category
+  for (const rule of VAT_RULES) {
+    if (rule.keywords.some(keyword => lowerDesc.includes(keyword))) {
+      const rate = rule.rates[countryCode] ?? rule.rates.default ?? COUNTRY_DATA[countryCode]?.defaultVatRate ?? 19;
+      return { rate, category: rule.category };
+    }
+  }
+  
+  // Default to standard rate for the country
+  const defaultRate = COUNTRY_DATA[countryCode]?.defaultVatRate ?? 19;
+  return { rate: defaultRate, category: 'Standard (no category match)' };
+}
+
+// ─── Detect Withholding Tax Type from description ────────
+function detectWithholdingTaxType(serviceDescription: string, countryCode: string): 'NONE' | 'HONORAIRES' | 'LOYERS' | 'MARCHES' {
+  if (countryCode !== 'TN') return 'NONE'; // Only Tunisia has RAS
+  
+  const lowerDesc = serviceDescription.toLowerCase();
+  
+  for (const [type, rule] of Object.entries(RAS_RULES)) {
+    if (rule.keywords.some(keyword => lowerDesc.includes(keyword))) {
+      return type as any;
+    }
+  }
+  
+  return 'NONE';
+}
+
+// ─── MAIN INTELLIGENT FISCAL ENGINE ──────────────────────
 export class FiscalEngine {
+  
   static calculate(input: FiscalEngineInput): FiscalEngineOutput {
     const appliedRules: string[] = [];
-    const countryRule = COUNTRY_RULES[input.country] ?? COUNTRY_RULES['TN'];
-    const exchangeRate = EXCHANGE_RATES[input.currency] ?? 1;
-    const amountInTND = input.amountHT * exchangeRate;
-
-    // ── TVA ──────────────────────────────────────────────
-    let tvaRate = 0;
-    let tva = 0;
-
-    if (input.taxOverride?.tva !== undefined) {
-      tva = input.taxOverride.tva;
-      tvaRate = input.amountHT > 0 ? (tva / input.amountHT) * 100 : 0;
-      appliedRules.push(`Override TVA manuel : ${tva.toFixed(3)} (taux ${tvaRate.toFixed(2)}%)`);
-    } else if (!countryRule.isLocal || input.country !== 'TN') {
-      // Export ou pays étranger : TVA selon règles du pays destinataire
-      tvaRate = countryRule.tvaRate;
-      tva = input.amountHT * (tvaRate / 100);
-      if (tvaRate === 0) {
-        appliedRules.push(`Export vers ${countryRule.name} : TVA 0% (exonéré)`);
+    
+    // 1. Detect country from address
+    const detectedCountry = detectCountryFromAddress(input.clientAddress);
+    const countryData = COUNTRY_DATA[detectedCountry] ?? COUNTRY_DATA['TN'];
+    appliedRules.push(`🌍 Pays détecté: ${countryData.name} (${detectedCountry})`);
+    
+    // 2. Detect currency from country
+    const detectedCurrency = countryData.currency;
+    appliedRules.push(`💰 Devise détectée: ${detectedCurrency}`);
+    
+    // 3. Detect VAT rate intelligently from description + country
+    let tvaRate: number;
+    let vatCategory: string;
+    
+    if (input.manualOverride?.tva !== undefined) {
+      // Manual override
+      tvaRate = (input.manualOverride.tva / input.amountHT) * 100;
+      vatCategory = 'Manuel (override)';
+      appliedRules.push(`🎛️ TVA manuelle: ${input.manualOverride.tva} (taux ${tvaRate.toFixed(2)}%)`);
+    } else {
+      const detection = detectVatRate(input.serviceDescription, detectedCountry);
+      tvaRate = detection.rate;
+      vatCategory = detection.category;
+      appliedRules.push(`🧠 TVA intelligente: ${tvaRate}% (Catégorie: ${vatCategory})`);
+    }
+    
+    const tvaAmount = input.amountHT * (tvaRate / 100);
+    
+    // 4. Calculate stamp duty (timbre fiscal)
+    let timbreAmount = 0;
+    if (input.manualOverride?.timbre !== undefined) {
+      timbreAmount = input.manualOverride.timbre;
+      appliedRules.push(`🎛️ Timbre manuel: ${timbreAmount} TND`);
+    } else if (countryData.hasStampDuty && input.amountHT > countryData.stampDutyThreshold) {
+      timbreAmount = countryData.stampDutyAmount;
+      appliedRules.push(`📮 Timbre fiscal: ${timbreAmount} TND (seuil ${countryData.stampDutyThreshold} TND dépassé)`);
+    } else {
+      appliedRules.push(`📮 Pas de timbre fiscal`);
+    }
+    
+    // 5. Detect Withholding Tax (RAS) for Tunisia
+    let rasType = input.withholdingTaxType || 'NONE';
+    let rasAmount = 0;
+    
+    if (input.manualOverride?.ras !== undefined) {
+      rasAmount = input.manualOverride.ras;
+      appliedRules.push(`🎛️ RAS manuel: ${rasAmount}`);
+    } else if (detectedCountry === 'TN') {
+      // Auto-detect RAS type from description if not specified
+      if (rasType === 'NONE') {
+        rasType = detectWithholdingTaxType(input.serviceDescription, detectedCountry);
+      }
+      
+      if (rasType !== 'NONE') {
+        const rasRate = RAS_RULES[rasType]?.rate || 0;
+        rasAmount = input.amountHT * (rasRate / 100);
+        appliedRules.push(`🏛️ RAS ${rasRate}% appliquée (${RAS_RULES[rasType]?.description || rasType})`);
       } else {
-        appliedRules.push(`TVA ${tvaRate}% appliquée (${countryRule.name})`);
+        appliedRules.push(`🏛️ Pas de RAS (non applicable)`);
       }
     } else {
-      // Tunisie locale — taux standard 19%
-      tvaRate = countryRule.tvaRate;
-      tva = input.amountHT * (tvaRate / 100);
-      appliedRules.push(`TVA ${tvaRate}% appliquée (Tunisie - taux standard)`);
+      appliedRules.push(`🏛️ Pas de RAS (pays étranger: ${countryData.name})`);
     }
-
-    // ── Timbre fiscal ────────────────────────────────────
-    let timbre = 0;
-    const subtotalTND = amountInTND + tva * exchangeRate;
-
-    if (input.taxOverride?.timbre !== undefined) {
-      timbre = input.taxOverride.timbre;
-      appliedRules.push(`Override timbre fiscal manuel : ${timbre} TND`);
-    } else if (
-      countryRule.stampDutyThreshold > 0 &&
-      subtotalTND > countryRule.stampDutyThreshold
-    ) {
-      timbre = countryRule.stampDutyAmount;
-      appliedRules.push(
-        `Timbre fiscal ${timbre} TND appliqué (HT ${subtotalTND.toFixed(3)} TND > seuil ${countryRule.stampDutyThreshold} TND)`,
-      );
-    } else {
-      appliedRules.push(`Pas de timbre fiscal applicable`);
-    }
-
-    // ── Retenue à la source ──────────────────────────────
-    let rasRate = 0;
-    let ras = 0;
-    const rasType = input.withholdingTaxType ?? 'NONE';
-
-    if (input.taxOverride?.ras !== undefined) {
-      ras = input.taxOverride.ras;
-      rasRate = input.amountHT > 0 ? (ras / input.amountHT) * 100 : 0;
-      appliedRules.push(`Override RAS manuel : ${ras.toFixed(3)} (taux ${rasRate.toFixed(2)}%)`);
-    } else if (input.country === 'TN' && rasType !== 'NONE') {
-      // RAS tunisienne — 3 types
-      rasRate = RAS_RATES[rasType] ?? 0;
-      ras = input.amountHT * (rasRate / 100);
-      const rasLabel: Record<string, string> = {
-        HONORAIRES: 'honoraires / professions libérales',
-        LOYERS: 'locations immobilières',
-        MARCHES: 'marchés publics',
-      };
-      appliedRules.push(
-        `RAS ${rasRate}% appliquée (${rasLabel[rasType] ?? rasType})`,
-      );
-    } else {
-      appliedRules.push(
-        input.country !== 'TN'
-          ? `Pas de RAS (pays non-tunisien : ${countryRule.name})`
-          : 'Pas de RAS (type : NONE)',
-      );
-    }
-
-    const totalTTC = input.amountHT + tva + timbre - ras;
-
+    
+    // 6. Calculate total
+    const totalTTC = input.amountHT + tvaAmount + timbreAmount - rasAmount;
+    
     return {
-      tva: round3(tva),
-      timbre: round3(timbre),
-      ras: round3(ras),
+      detectedCountry,
+      detectedCurrency,
+      tvaRate: round3(tvaRate),
+      tvaAmount: round3(tvaAmount),
+      timbreAmount: round3(timbreAmount),
+      rasAmount: round3(rasAmount),
       totalTTC: round3(totalTTC),
-      details: {
-        tvaRate: round3(tvaRate),
-        rasRate: round3(rasRate),
-        appliedRules,
-        country: `${input.country} — ${countryRule.name}`,
-        currency: input.currency,
-      },
+      appliedRules,
     };
   }
-
-  // ─── Calcul depuis une facture/devis ─────────────────
+  
+  // Convenience method for Quotation/Invoice
   static calculateForDocument(doc: {
     subtotal: number;
-    currency: string;
-    withholdingTaxType?: string;
-    client: {
-      /** Pas de champ pays en BDD : le pays est déduit du dernier mot de l’adresse. */
-      address?: string | null;
-      type?: 'PRO' | 'INDIVIDUAL';
-    };
-    taxOverride?: { tva?: number; timbre?: number; ras?: number } | null;
+    serviceDescription: string;
+    clientAddress?: string | null;
+    clientType: 'PRO' | 'INDIVIDUAL';
+    withholdingTaxType?: 'NONE' | 'HONORAIRES' | 'LOYERS' | 'MARCHES';
+    manualOverride?: { tva?: number; timbre?: number; ras?: number } | null;
   }): FiscalEngineOutput {
-    const country = extractCountryFromAddress(doc.client.address);
-
     return this.calculate({
       amountHT: doc.subtotal,
-      currency: doc.currency,
-      country,
-      clientType: doc.client.type ?? 'PRO',
-      withholdingTaxType: (doc.withholdingTaxType as 'NONE' | 'HONORAIRES' | 'LOYERS' | 'MARCHES') ?? 'NONE',
-      taxOverride: doc.taxOverride ?? null,
+      serviceDescription: doc.serviceDescription,
+      clientAddress: doc.clientAddress,
+      clientType: doc.clientType,
+      withholdingTaxType: doc.withholdingTaxType || 'NONE',
+      manualOverride: doc.manualOverride,
     });
   }
-
-  // ─── Validation cohérence facture ────────────────────
-  static validateDocument(doc: {
-    subtotal: number;
-    totalVat: number;
-    stampDuty: number;
-    withholdingTax: number;
-    total: number;
-    currency: string;
-    withholdingTaxType?: string;
-    client: {
-      address?: string | null;
-      type?: 'PRO' | 'INDIVIDUAL';
-    };
-  }): {
-    isValid: boolean;
-    differences: Record<string, number>;
-    expected: FiscalEngineOutput;
-  } {
-    const expected = this.calculateForDocument(doc);
-    const differences: Record<string, number> = {};
-
-    if (Math.abs(doc.totalVat - expected.tva) > 0.01)
-      differences.tva = round3(doc.totalVat - expected.tva);
-    if (Math.abs(doc.stampDuty - expected.timbre) > 0.01)
-      differences.timbre = round3(doc.stampDuty - expected.timbre);
-    if (Math.abs(doc.withholdingTax - expected.ras) > 0.01)
-      differences.ras = round3(doc.withholdingTax - expected.ras);
-    if (Math.abs(doc.total - expected.totalTTC) > 0.01)
-      differences.totalTTC = round3(doc.total - expected.totalTTC);
-
-    return {
-      isValid: Object.keys(differences).length === 0,
-      differences,
-      expected,
-    };
-  }
-
-  /** Alias sémantique « facture » — le pays vient uniquement de `client.address`. */
-  static validateInvoice(invoice: {
-    subtotal: number;
-    totalVat: number;
-    stampDuty: number;
-    withholdingTax: number;
-    total: number;
-    currency: string;
-    withholdingTaxType?: string;
-    client: { address?: string | null; type?: 'PRO' | 'INDIVIDUAL' };
-  }): {
-    isValid: boolean;
-    differences: Record<string, number>;
-    expected: FiscalEngineOutput;
-  } {
-    return this.validateDocument(invoice);
-  }
-
-  // ─── Utilitaire : liste des pays MENA supportés ──────
-  static getSupportedCountries(): { code: string; name: string; tvaRate: number }[] {
-    return Object.entries(COUNTRY_RULES).map(([code, rule]) => ({
-      code,
-      name: rule.name,
-      tvaRate: rule.tvaRate,
-    }));
-  }
-
-  // ─── Utilitaire : taux de change ─────────────────────
+  
   static getExchangeRate(currency: string): number {
     return EXCHANGE_RATES[currency] ?? 1;
   }
+  
+  static getSupportedCountries(): { code: string; name: string; currency: string; vatRate: number }[] {
+    return Object.entries(COUNTRY_DATA).map(([code, data]) => ({
+      code,
+      name: data.name,
+      currency: data.currency,
+      vatRate: data.defaultVatRate,
+    }));
+  }
 }
-

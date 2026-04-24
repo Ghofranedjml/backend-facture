@@ -1,10 +1,10 @@
-import { InvoiceStatus, Prisma, QuotationStatus, WithholdingTaxType } from '@prisma/client';
+import { InvoiceStatus, Prisma, QuotationStatus, VatRate, WithholdingTaxType } from '@prisma/client';
 import prisma from '../config/prisma';
 import { AppError } from '../middlewares/error.middleware';
 import { PaginationMeta } from '../types';
-import { calcLineTotal, calcTaxBreakdown } from '../utils/fiscalCalculator';
 import { generateInvoiceNumber } from '../utils/invoiceNumber';
 import { generateQuotationNumber } from '../utils/quotationNumber';
+import { FiscalEngine } from './fiscalEngine.service';
 import {
   ConvertQuotationInput,
   CreateQuotationInput,
@@ -17,6 +17,22 @@ const quotationInclude = {
   lines: { orderBy: { position: 'asc' as const } },
 } satisfies Prisma.QuotationInclude;
 
+// Helper to calculate line totals
+function calculateLineTotal(quantity: number, unitPrice: number): number {
+  return Math.round(quantity * unitPrice * 1000) / 1000;
+}
+
+// Helper to convert number to VatRate enum
+function numberToVatRate(rate: number): VatRate {
+  const roundedRate = Math.round(rate);
+  switch (roundedRate) {
+    case 0: return VatRate.ZERO;
+    case 7: return VatRate.SEVEN;
+    case 13: return VatRate.THIRTEEN;
+    case 19: return VatRate.NINETEEN;
+    default: return VatRate.NINETEEN;
+  }
+}
 export async function listQuotations(
   userId: string,
   query: QuotationQuery,
@@ -35,6 +51,7 @@ export async function listQuotations(
       OR: [
         { quotationNumber: { contains: search, mode: 'insensitive' } },
         { client: { name: { contains: search, mode: 'insensitive' } } },
+        { description: { contains: search, mode: 'insensitive' } },
       ],
     }),
   };
@@ -66,7 +83,7 @@ export async function getQuotation(
   });
 
   if (!quotation) throw new AppError(404, 'NOT_FOUND', 'Devis introuvable');
-  if (quotation.userId !== userId) throw new AppError(403, 'FORBIDDEN', 'Acces refuse');
+  if (quotation.userId !== userId) throw new AppError(403, 'FORBIDDEN', 'Accès refusé');
 
   return quotation;
 }
@@ -74,17 +91,36 @@ export async function getQuotation(
 export async function createQuotation(userId: string, input: CreateQuotationInput) {
   const client = await prisma.client.findUnique({ where: { id: input.clientId } });
   if (!client) throw new AppError(404, 'NOT_FOUND', 'Client introuvable');
-  if (client.userId !== userId) throw new AppError(403, 'FORBIDDEN', 'Client non autorise');
+  if (client.userId !== userId) throw new AppError(403, 'FORBIDDEN', 'Client non autorisé');
 
   const quotationNumber = await generateQuotationNumber();
 
+  // Calculate line totals
   const linesWithTotals = input.lines.map((line, i) => ({
-    ...line,
+    description: line.description,
+    quantity: line.quantity,
+    unitPrice: line.unitPrice,
+    vatRate: line.vatRate ?? 19,
     position: line.position ?? i,
-    lineTotal: calcLineTotal(line.quantity, line.unitPrice),
+    lineTotal: calculateLineTotal(line.quantity, line.unitPrice),
   }));
 
-  const tax = calcTaxBreakdown(linesWithTotals, WithholdingTaxType.NONE, false);
+  const subtotal = linesWithTotals.reduce((sum, line) => sum + line.lineTotal, 0);
+  
+  // Combine all line descriptions for intelligent detection
+  const combinedDescription = linesWithTotals.map(l => l.description).join(' ');
+  
+  // Use intelligent fiscal engine
+  const fiscalResult = FiscalEngine.calculate({
+    amountHT: subtotal,
+    serviceDescription: combinedDescription,
+    clientAddress: client.address,
+    clientType: 'PRO',
+    withholdingTaxType: WithholdingTaxType.NONE, // Quotations don't have RAS by default
+  });
+
+  // Calculate total with taxes
+  const total = subtotal + fiscalResult.tvaAmount + fiscalResult.timbreAmount - fiscalResult.rasAmount;
 
   return prisma.quotation.create({
     data: {
@@ -92,14 +128,28 @@ export async function createQuotation(userId: string, input: CreateQuotationInpu
       userId,
       clientId: input.clientId,
       contractId: input.contractId ?? null,
-      currency: input.currency,
+      currency: fiscalResult.detectedCurrency as any,
+      description: input.description ?? combinedDescription.substring(0, 500),
+      notes: input.notes ?? null,
       issueDate: input.issueDate,
       validUntil: input.validUntil,
-      notes: input.notes ?? null,
       status: QuotationStatus.DRAFT,
-      subtotal: tax.subtotal,
-      totalVat: tax.totalVat,
-      total: tax.total,
+      
+      // Financial fields
+      subtotal,
+      totalVat: fiscalResult.tvaAmount,
+      stampDuty: fiscalResult.timbreAmount,
+      withholdingTax: fiscalResult.rasAmount,
+      total,
+      withholdingTaxType: WithholdingTaxType.NONE,
+      
+      // Intelligent detection fields
+      countryCode: fiscalResult.detectedCountry,
+      autoDetected: true,
+      manualVatRate: null,
+      detectedVatRate: fiscalResult.tvaRate,
+      useIntelligentVat: true,
+      
       lines: {
         create: linesWithTotals.map((l) => ({
           position: l.position,
@@ -121,35 +171,53 @@ export async function updateQuotation(
   input: UpdateQuotationInput,
 ) {
   const existing = await getQuotation(quotationId, userId);
+  
   if (existing.status !== QuotationStatus.DRAFT) {
-    throw new AppError(422, 'INVALID_STATUS', 'Seuls les devis en brouillon peuvent etre modifies');
+    throw new AppError(422, 'INVALID_STATUS', 'Seuls les devis en brouillon peuvent être modifiés');
   }
 
   if (input.clientId !== undefined) {
     const client = await prisma.client.findUnique({ where: { id: input.clientId } });
     if (!client) throw new AppError(404, 'NOT_FOUND', 'Client introuvable');
-    if (client.userId !== userId) throw new AppError(403, 'FORBIDDEN', 'Client non autorise');
+    if (client.userId !== userId) throw new AppError(403, 'FORBIDDEN', 'Client non autorisé');
   }
 
-  if (input.issueDate && input.validUntil && input.validUntil < input.issueDate) {
-    throw new AppError(422, 'VALIDATION_ERROR', "La date de validite doit etre apres la date d'emission");
+  // Validate dates
+  const issueDate = input.issueDate || existing.issueDate;
+  const validUntil = input.validUntil || existing.validUntil;
+  
+  if (validUntil < issueDate) {
+    throw new AppError(422, 'VALIDATION_ERROR', "La date de validité doit être après la date d'émission");
   }
 
-  if (input.issueDate && !input.validUntil && existing.validUntil < input.issueDate) {
-    throw new AppError(422, 'VALIDATION_ERROR', "La date de validite doit etre apres la date d'emission");
-  }
-
-  if (!input.issueDate && input.validUntil && input.validUntil < existing.issueDate) {
-    throw new AppError(422, 'VALIDATION_ERROR', "La date de validite doit etre apres la date d'emission");
-  }
-
+  // If lines are updated, recalculate everything
   if (input.lines) {
     const linesWithTotals = input.lines.map((line, i) => ({
-      ...line,
+      description: line.description,
+      quantity: line.quantity,
+      unitPrice: line.unitPrice,
+      vatRate: line.vatRate ?? 19,
       position: line.position ?? i,
-      lineTotal: calcLineTotal(line.quantity, line.unitPrice),
+      lineTotal: calculateLineTotal(line.quantity, line.unitPrice),
     }));
-    const tax = calcTaxBreakdown(linesWithTotals, WithholdingTaxType.NONE, false);
+
+    const subtotal = linesWithTotals.reduce((sum, line) => sum + line.lineTotal, 0);
+    const combinedDescription = linesWithTotals.map(l => l.description).join(' ');
+    
+    // Get client for address detection
+    const client = input.clientId 
+      ? await prisma.client.findUnique({ where: { id: input.clientId } })
+      : existing.client;
+    
+    const fiscalResult = FiscalEngine.calculate({
+      amountHT: subtotal,
+      serviceDescription: combinedDescription,
+      clientAddress: client?.address,
+      clientType: 'PRO',
+      withholdingTaxType: 'NONE',
+    });
+
+    const total = subtotal + fiscalResult.tvaAmount + fiscalResult.timbreAmount - fiscalResult.rasAmount;
 
     return prisma.$transaction(async (tx) => {
       await tx.quotationLine.deleteMany({ where: { quotationId } });
@@ -162,10 +230,20 @@ export async function updateQuotation(
           ...(input.currency && { currency: input.currency }),
           ...(input.issueDate && { issueDate: input.issueDate }),
           ...(input.validUntil && { validUntil: input.validUntil }),
+          ...(input.description !== undefined && { description: input.description }),
           ...(input.notes !== undefined && { notes: input.notes }),
-          subtotal: tax.subtotal,
-          totalVat: tax.totalVat,
-          total: tax.total,
+          
+          // Recalculated financials
+          subtotal,
+          totalVat: fiscalResult.tvaAmount,
+          stampDuty: fiscalResult.timbreAmount,
+          withholdingTax: fiscalResult.rasAmount,
+          total,
+          
+          // Update detection
+          countryCode: fiscalResult.detectedCountry,
+          detectedVatRate: fiscalResult.tvaRate,
+          
           lines: {
             create: linesWithTotals.map((l) => ({
               position: l.position,
@@ -182,6 +260,7 @@ export async function updateQuotation(
     });
   }
 
+  // No line changes, just update basic fields
   return prisma.quotation.update({
     where: { id: quotationId },
     data: {
@@ -190,6 +269,7 @@ export async function updateQuotation(
       ...(input.currency && { currency: input.currency }),
       ...(input.issueDate && { issueDate: input.issueDate }),
       ...(input.validUntil && { validUntil: input.validUntil }),
+      ...(input.description !== undefined && { description: input.description }),
       ...(input.notes !== undefined && { notes: input.notes }),
     },
     include: quotationInclude,
@@ -199,7 +279,7 @@ export async function updateQuotation(
 export async function deleteQuotation(quotationId: string, userId: string): Promise<void> {
   const existing = await getQuotation(quotationId, userId);
   if (existing.status !== QuotationStatus.DRAFT) {
-    throw new AppError(422, 'INVALID_STATUS', 'Seuls les devis en brouillon peuvent etre supprimes');
+    throw new AppError(422, 'INVALID_STATUS', 'Seuls les devis en brouillon peuvent être supprimés');
   }
   await prisma.quotation.delete({ where: { id: quotationId } });
 }
@@ -207,7 +287,7 @@ export async function deleteQuotation(quotationId: string, userId: string): Prom
 export async function sendQuotation(quotationId: string, userId: string) {
   const quotation = await getQuotation(quotationId, userId);
   if (quotation.status !== QuotationStatus.DRAFT) {
-    throw new AppError(422, 'INVALID_STATUS', 'Seuls les devis en brouillon peuvent etre envoyes');
+    throw new AppError(422, 'INVALID_STATUS', 'Seuls les devis en brouillon peuvent être envoyés');
   }
 
   return prisma.quotation.update({
@@ -220,7 +300,7 @@ export async function sendQuotation(quotationId: string, userId: string) {
 export async function acceptQuotation(quotationId: string, userId: string) {
   const quotation = await getQuotation(quotationId, userId);
   if (quotation.status !== QuotationStatus.SENT) {
-    throw new AppError(422, 'INVALID_STATUS', 'Seuls les devis envoyes peuvent etre acceptes');
+    throw new AppError(422, 'INVALID_STATUS', 'Seuls les devis envoyés peuvent être acceptés');
   }
 
   return prisma.quotation.update({
@@ -233,7 +313,7 @@ export async function acceptQuotation(quotationId: string, userId: string) {
 export async function refuseQuotation(quotationId: string, userId: string) {
   const quotation = await getQuotation(quotationId, userId);
   if (quotation.status !== QuotationStatus.SENT) {
-    throw new AppError(422, 'INVALID_STATUS', 'Seuls les devis envoyes peuvent etre refuses');
+    throw new AppError(422, 'INVALID_STATUS', 'Seuls les devis envoyés peuvent être refusés');
   }
 
   return prisma.quotation.update({
@@ -250,8 +330,8 @@ export async function convertQuotationToInvoice(
 ) {
   const quotation = await getQuotation(quotationId, userId);
 
-  if (quotation.status !== QuotationStatus.ACCEPTED && quotation.status !== QuotationStatus.SENT) {
-    throw new AppError(422, 'INVALID_STATUS', 'Seuls les devis acceptés ou envoyés peuvent etre convertis');
+  if (quotation.status !== QuotationStatus.ACCEPTED) {
+    throw new AppError(422, 'INVALID_STATUS', 'Seuls les devis acceptés peuvent être convertis en facture');
   }
 
   return prisma.$transaction(async (tx) => {
@@ -266,18 +346,23 @@ export async function convertQuotationToInvoice(
         currency: quotation.currency,
         subtotal: quotation.subtotal,
         totalVat: quotation.totalVat,
+        stampDuty: quotation.stampDuty,
+        withholdingTax: quotation.withholdingTax,
         total: quotation.total,
+        withholdingTaxType: WithholdingTaxType.NONE,
         issueDate: input.invoiceIssueDate,
         dueDate: input.invoiceDueDate,
         notes: input.notes ?? quotation.notes,
         status: InvoiceStatus.DRAFT,
+        countryCode: quotation.countryCode,
+        autoDetected: quotation.autoDetected,
         lines: {
-          create: quotation.lines.map((line) => ({
-            position: line.position,
+          create: quotation.lines.map((line, idx) => ({
+            position: idx,
             description: line.description,
             quantity: line.quantity,
             unitPrice: line.unitPrice,
-            vatRate: line.vatRate,
+            vatRate: numberToVatRate(line.vatRate), // Map to VatRate enum
             lineTotal: line.lineTotal,
           })),
         },

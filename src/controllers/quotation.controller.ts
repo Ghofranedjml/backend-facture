@@ -1,4 +1,5 @@
 import { NextFunction, Request, Response } from 'express';
+import { z } from 'zod';
 import * as quotationService from '../services/quotation.service';
 import {
   convertQuotationSchema,
@@ -6,6 +7,11 @@ import {
   quotationQuerySchema,
   updateQuotationSchema,
 } from '../utils/validators';
+
+// validation for req.params.id to ensure it's a valid CUID before passing to service
+const idParamSchema = z.object({
+  id: z.string().cuid('ID de devis invalide'),
+});
 
 // GET /api/quotations
 export async function index(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -21,7 +27,10 @@ export async function index(req: Request, res: Response, next: NextFunction): Pr
 // GET /api/quotations/:id
 export async function show(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const quotation = await quotationService.getQuotation(req.params.id, req.user!.userId);
+    // ─── Add this line ───
+    const { id } = idParamSchema.parse(req.params);
+    
+    const quotation = await quotationService.getQuotation(id, req.user!.userId);
     res.json({ success: true, data: quotation });
   } catch (err) {
     next(err);
@@ -42,8 +51,11 @@ export async function create(req: Request, res: Response, next: NextFunction): P
 // PUT /api/quotations/:id
 export async function update(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    // ─── Add this line ───
+    const { id } = idParamSchema.parse(req.params);
+    
     const input = updateQuotationSchema.parse(req.body);
-    const quotation = await quotationService.updateQuotation(req.params.id, req.user!.userId, input);
+    const quotation = await quotationService.updateQuotation(id, req.user!.userId, input);
     res.json({ success: true, data: quotation });
   } catch (err) {
     next(err);
@@ -53,7 +65,10 @@ export async function update(req: Request, res: Response, next: NextFunction): P
 // DELETE /api/quotations/:id
 export async function destroy(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    await quotationService.deleteQuotation(req.params.id, req.user!.userId);
+    // ─── Add this line ───
+    const { id } = idParamSchema.parse(req.params);
+    
+    await quotationService.deleteQuotation(id, req.user!.userId);
     res.status(204).send();
   } catch (err) {
     next(err);
@@ -63,7 +78,10 @@ export async function destroy(req: Request, res: Response, next: NextFunction): 
 // POST /api/quotations/:id/send
 export async function send(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const quotation = await quotationService.sendQuotation(req.params.id, req.user!.userId);
+    // ─── Add this line ───
+    const { id } = idParamSchema.parse(req.params);
+    
+    const quotation = await quotationService.sendQuotation(id, req.user!.userId);
     res.json({ success: true, data: quotation });
   } catch (err) {
     next(err);
@@ -73,7 +91,10 @@ export async function send(req: Request, res: Response, next: NextFunction): Pro
 // POST /api/quotations/:id/accept
 export async function accept(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const quotation = await quotationService.acceptQuotation(req.params.id, req.user!.userId);
+    // ─── Add this line ───
+    const { id } = idParamSchema.parse(req.params);
+    
+    const quotation = await quotationService.acceptQuotation(id, req.user!.userId);
     res.json({ success: true, data: quotation });
   } catch (err) {
     next(err);
@@ -83,7 +104,10 @@ export async function accept(req: Request, res: Response, next: NextFunction): P
 // POST /api/quotations/:id/refuse
 export async function refuse(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const quotation = await quotationService.refuseQuotation(req.params.id, req.user!.userId);
+    // ─── Add this line ───
+    const { id } = idParamSchema.parse(req.params);
+    
+    const quotation = await quotationService.refuseQuotation(id, req.user!.userId);
     res.json({ success: true, data: quotation });
   } catch (err) {
     next(err);
@@ -93,8 +117,11 @@ export async function refuse(req: Request, res: Response, next: NextFunction): P
 // POST /api/quotations/:id/convert
 export async function convert(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    // ─── Add this line ───
+    const { id } = idParamSchema.parse(req.params);
+    
     const input = convertQuotationSchema.parse(req.body);
-    const invoice = await quotationService.convertQuotationToInvoice(req.params.id, req.user!.userId, input);
+    const invoice = await quotationService.convertQuotationToInvoice(id, req.user!.userId, input);
     res.json({ success: true, data: invoice });
   } catch (err) {
     next(err);

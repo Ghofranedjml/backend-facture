@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { InvoiceStatus, Currency, VatRate, WithholdingTaxType } from '@prisma/client';
+import { InvoiceStatus, Currency, VatRate, WithholdingTaxType, QuotationStatus } from '@prisma/client';
 
 // ─── Shared ────────────────────────────────
 
@@ -82,6 +82,67 @@ export const invoiceQuerySchema = z.object({
 });
 
 export type InvoiceQuery = z.infer<typeof invoiceQuerySchema>;
+
+// Quotation Line Validator
+export const quotationLineSchema = z.object({
+  description: z.string().min(1, 'Description requise').max(500),
+  quantity: decimalPositive,
+  unitPrice: z.number().min(0, 'Prix unitaire ne peut pas être négatif').multipleOf(0.001),
+  vatRate: z.number().min(0).max(100).optional(),  // Flexible, not tied to VatRate enum
+  position: z.number().int().min(0).optional(),
+});
+
+export type QuotationLineInput = z.infer<typeof quotationLineSchema>;
+
+// Create Quotation Input
+export const createQuotationSchema = z.object({
+  clientId: z.string().cuid('clientId invalide'),
+  contractId: z.string().optional().nullable(),
+  currency: z.nativeEnum(Currency).default('TND'),
+  issueDate: z.coerce.date(),
+  validUntil: z.coerce.date(),
+  description: z.string().max(500).optional().nullable(),
+  notes: z.string().max(1000).optional().nullable(),
+  lines: z.array(quotationLineSchema).min(1, 'Au moins une ligne requise').max(50, 'Maximum 50 lignes'),
+}).refine((data) => data.validUntil >= data.issueDate, {
+  message: "La date de validité doit être après la date d'émission",
+  path: ['validUntil'],
+});
+
+export type CreateQuotationInput = z.infer<typeof createQuotationSchema>;
+
+// Update Quotation Input
+export const updateQuotationSchema = createQuotationSchema.partial().extend({
+  status: z.nativeEnum(QuotationStatus).optional(),
+});
+
+export type UpdateQuotationInput = z.infer<typeof updateQuotationSchema>;
+
+// Convert Quotation to Invoice
+export const convertQuotationSchema = z.object({
+  quotationId: z.string().cuid(),
+  invoiceIssueDate: z.coerce.date(),
+  invoiceDueDate: z.coerce.date(),
+  notes: z.string().max(500).optional().nullable(),
+}).refine((data) => data.invoiceDueDate >= data.invoiceIssueDate, {
+  message: "La date d'échéance doit être après la date d'émission",
+  path: ['invoiceDueDate'],
+});
+
+export type ConvertQuotationInput = z.infer<typeof convertQuotationSchema>;
+
+// Quotation Query Filters
+export const quotationQuerySchema = z.object({
+  status: z.nativeEnum(QuotationStatus).optional(),
+  clientId: z.string().optional(),
+  search: z.string().max(100).optional(),
+  dateFrom: z.coerce.date().optional(),
+  dateTo: z.coerce.date().optional(),
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+export type QuotationQuery = z.infer<typeof quotationQuerySchema>;
 
 // ─── Client ────────────────────────────────
 
