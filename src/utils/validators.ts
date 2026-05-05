@@ -94,8 +94,8 @@ export const quotationLineSchema = z.object({
 
 export type QuotationLineInput = z.infer<typeof quotationLineSchema>;
 
-// Create Quotation Input
-export const createQuotationSchema = z.object({
+// Create Quotation Base Schema (without refine)
+const createQuotationBaseSchema = z.object({
   clientId: z.string().cuid('clientId invalide'),
   contractId: z.string().optional().nullable(),
   currency: z.nativeEnum(Currency).default('TND'),
@@ -104,20 +104,22 @@ export const createQuotationSchema = z.object({
   description: z.string().max(500).optional().nullable(),
   notes: z.string().max(1000).optional().nullable(),
   lines: z.array(quotationLineSchema).min(1, 'Au moins une ligne requise').max(50, 'Maximum 50 lignes'),
-}).refine((data) => data.validUntil >= data.issueDate, {
+});
+
+// Create Quotation Input (with refine for validation)
+export const createQuotationSchema = createQuotationBaseSchema.refine((data) => data.validUntil >= data.issueDate, {
   message: "La date de validité doit être après la date d'émission",
   path: ['validUntil'],
 });
 
 export type CreateQuotationInput = z.infer<typeof createQuotationSchema>;
 
-// Update Quotation Input
-export const updateQuotationSchema = createQuotationSchema.partial().extend({
+// Update Quotation Input (uses Base schema for .partial())
+export const updateQuotationSchema = createQuotationBaseSchema.partial().extend({
   status: z.nativeEnum(QuotationStatus).optional(),
 });
 
 export type UpdateQuotationInput = z.infer<typeof updateQuotationSchema>;
-
 // Convert Quotation to Invoice
 export const convertQuotationSchema = z.object({
   quotationId: z.string().cuid(),
